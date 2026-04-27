@@ -6,16 +6,44 @@
 import SwiftUI
 import RealityKit
 import ARKit
-import Vision
 
 struct ContentView: View {
+    // 🌟 追加：文字が固定されているかどうかを判定する変数（最初はfalse＝固定されていない）
+    @State private var isLocked = false
+    
     var body: some View {
-        ARViewContainer()
-            .edgesIgnoringSafeArea(.all)
+        // ZStackで、AR画面の上にボタンを重ねる
+        ZStack {
+            // ARViewContainerに isLocked の状態を渡す
+            ARViewContainer(isLocked: $isLocked)
+                .edgesIgnoringSafeArea(.all)
+            
+            // 🌟 画面の下に「固定ボタン」を配置
+            VStack {
+                Spacer()
+                Button(action: {
+                    // ボタンを押すたびに true / false が切り替わる
+                    isLocked.toggle()
+                }) {
+                    Text(isLocked ? "解除" : "固定")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                        .foregroundColor(.white)
+                        .padding()
+                        .frame(width: 200)
+                        .background(isLocked ? Color.red : Color.blue) // ロック中は赤、解除中は青
+                        .cornerRadius(15)
+                        .shadow(radius: 5)
+                }
+                .padding(.bottom, 50) // 画面下からの余白
+            }
+        }
     }
 }
 
 struct ARViewContainer: UIViewRepresentable {
+    // ContentViewから isLocked の状態を受け取る
+    @Binding var isLocked: Bool
     
     func makeUIView(context: Context) -> ARView {
         let arView = ARView(frame: .zero)
@@ -24,139 +52,102 @@ struct ARViewContainer: UIViewRepresentable {
         config.planeDetection = [.horizontal]
         arView.session.run(config)
         
-        arView.session.delegate = context.coordinator
+        // ==========================================
+        // 🎨 1. 縦書きの文字を作る（1文字ずつ並べる）
+        // ==========================================
+        let address = "北海道函館市亀田中野町一一六番地二"
+        let textContainer = Entity()
+        
+        var textMaterial = UnlitMaterial(color: UIColor.black.withAlphaComponent(0.2))
+        textMaterial.blending = .transparent(opacity: 1.0)
+        
+        let lineSpacing: Float = 0.0088
+        var currentY: Float = 0.0
+        
+        let customFont = UIFont(name: "KleeOne-SemiBold", size: 0.005) ?? UIFont(name: "HiraMinProN-W6", size: 0.008) ?? .systemFont(ofSize: 0.008, weight: .bold)
+        
+        for char in address {
+            let charMesh = MeshResource.generateText(
+                String(char),
+                extrusionDepth: 0.0,
+                font: customFont
+            )
+            let charEntity = ModelEntity(mesh: charMesh, materials: [textMaterial])
+            
+            let charBounds = charEntity.visualBounds(relativeTo: nil)
+            charEntity.position = [
+                -charBounds.center.x,
+                currentY,
+                0
+            ]
+            
+            textContainer.addChild(charEntity)
+            currentY -= lineSpacing
+        }
+        
+        let totalBounds = textContainer.visualBounds(relativeTo: nil)
+        textContainer.position = -totalBounds.center
         
         // ==========================================
-        // 🎨 ゴムのように伸び縮みする「1m×1mの基準シート」を作る
+        // 🎨 2. 文字を寝かせる
         // ==========================================
-        // ベースとして1m x 1m の平面を作る（後で認識したサイズにScaleで掛け算して変形させます）
-        let mesh = MeshResource.generatePlane(width: 1.0, depth: 1.0)
+        let flatWrapper = Entity()
+        flatWrapper.addChild(textContainer)
+        flatWrapper.transform.rotation = simd_quatf(angle: -.pi / 2, axis: SIMD3<Float>(1, 0, 0))
         
-        // 赤色で、少し透けて見える（アルファ値0.5）素材にする（デバッグに最適！）
-        let material = SimpleMaterial(color: UIColor.red.withAlphaComponent(0.5), isMetallic: false)
-        
-        let frameEntity = ModelEntity(mesh: mesh, materials: [material])
-        frameEntity.isEnabled = false
-        
-        let anchor = AnchorEntity(world: [0, 0, 0])
-        anchor.addChild(frameEntity)
-        arView.scene.addAnchor(anchor)
+        let cursorAnchor = AnchorEntity(world: [0, 0, 0])
+        cursorAnchor.addChild(flatWrapper)
+        arView.scene.addAnchor(cursorAnchor)
         
         context.coordinator.arView = arView
-        context.coordinator.markerEntity = frameEntity
+        context.coordinator.cursorAnchor = cursorAnchor
+        arView.session.delegate = context.coordinator
         
         return arView
     }
     
-    func updateUIView(_ uiView: ARView, context: Context) {}
+    // 🌟 SwiftUI側でボタンが押されたら、ここが呼ばれてCoordinatorに状態を伝える
+    func updateUIView(_ uiView: ARView, context: Context) {
+        context.coordinator.isLocked = isLocked
+    }
+    
     func makeCoordinator() -> Coordinator { Coordinator() }
     
     class Coordinator: NSObject, ARSessionDelegate {
-            weak var arView: ARView?
-            var markerEntity: ModelEntity?
-            var isProcessing = false
+        weak var arView: ARView?
+        weak var cursorAnchor: AnchorEntity?
+        
+        // Coordinator側でもロック状態を持っておく
+        var isLocked = false
+        
+        func session(_ session: ARSession, didUpdate frame: ARFrame) {
+            guard let arView = arView, let cursorAnchor = cursorAnchor else { return }
             
-            // 🌟 追加：現在の「位置」「サイズ」「角度」を記憶しておく変数
-            var currentPosition: SIMD3<Float>?
-            var currentScale: SIMD3<Float>?
-            var currentAngle: Float?
+            // 🌟 もしロックされていたら、ここから下の「座標・角度の更新」を無視して終了する！
+            guard !isLocked else { return }
             
-            func session(_ session: ARSession, didUpdate frame: ARFrame) {
-                guard !isProcessing else { return }
-                isProcessing = true
+            let screenCenter = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
+            
+            if let result = arView.raycast(from: screenCenter, allowing: .estimatedPlane, alignment: .horizontal).first {
                 
-                let pixelBuffer = frame.capturedImage
+                let hitPosition = result.worldTransform.columns.3
+                // 1ミリ浮かせる
+                cursorAnchor.position = SIMD3<Float>(hitPosition.x, hitPosition.y + 0.001, hitPosition.z)
                 
-                let request = VNDetectRectanglesRequest { [weak self] request, error in
-                    defer { self?.isProcessing = false }
-                    
-                    guard let results = request.results as? [VNRectangleObservation], let rectangle = results.first else {
-                        DispatchQueue.main.async { self?.markerEntity?.isEnabled = false }
-                        return
-                    }
-                    
-                    DispatchQueue.main.async {
-                        guard let arView = self?.arView else { return }
-                        let viewportSize = arView.bounds.size
-                        
-                        let transform = frame.displayTransform(for: .portrait, viewportSize: viewportSize)
-                        func convertToScreen(_ visionPoint: CGPoint) -> CGPoint {
-                            let flippedY = CGPoint(x: visionPoint.x, y: 1.0 - visionPoint.y)
-                            let normalized = flippedY.applying(transform)
-                            return CGPoint(x: normalized.x * viewportSize.width, y: normalized.y * viewportSize.height)
-                        }
-                        
-                        let tl = convertToScreen(rectangle.topLeft)
-                        let tr = convertToScreen(rectangle.topRight)
-                        let bl = convertToScreen(rectangle.bottomLeft)
-                        let centerPoint = convertToScreen(CGPoint(x: rectangle.boundingBox.midX, y: rectangle.boundingBox.midY))
-                        
-                        guard let centerResult = arView.raycast(from: centerPoint, allowing: .estimatedPlane, alignment: .horizontal).first,
-                              let tlResult = arView.raycast(from: tl, allowing: .estimatedPlane, alignment: .horizontal).first,
-                              let trResult = arView.raycast(from: tr, allowing: .estimatedPlane, alignment: .horizontal).first,
-                              let blResult = arView.raycast(from: bl, allowing: .estimatedPlane, alignment: .horizontal).first else { return }
-                        
-                        let physicalWidth = distance(tlResult.worldTransform.columns.3, trResult.worldTransform.columns.3)
-                        let physicalHeight = distance(tlResult.worldTransform.columns.3, blResult.worldTransform.columns.3)
-                        
-                        print(String(format: "🔍 修正後サイズ: 横 %.1f cm / 縦 %.1f cm", physicalWidth * 100, physicalHeight * 100))
-                        
-                        let dx3D = trResult.worldTransform.columns.3.x - tlResult.worldTransform.columns.3.x
-                        let dz3D = trResult.worldTransform.columns.3.z - tlResult.worldTransform.columns.3.z
-                        let targetAngle = atan2(dz3D, dx3D)
-                        
-                        // 🌟 今回計算した「理想の目標地点」
-                        let targetPosition = SIMD3<Float>(
-                            centerResult.worldTransform.columns.3.x,
-                            centerResult.worldTransform.columns.3.y + 0.001,
-                            centerResult.worldTransform.columns.3.z
-                        )
-                        let targetScale = SIMD3<Float>(physicalWidth, 1.0, physicalHeight)
-                        
-                        // 🌟 修正ポイント：急に動かさず、少しずつ目標値に近づける（スムージング）
-                        if let currPos = self?.currentPosition, let currScale = self?.currentScale, let currAngle = self?.currentAngle {
-                            
-                            // 15%だけ目標に近づける（数値を小さくするほど、チカチカが減ってヌルッと動く）
-                            let smooth: Float = 0.15
-                            
-                            self?.currentPosition = currPos + (targetPosition - currPos) * smooth
-                            self?.currentScale = currScale + (targetScale - currScale) * smooth
-                            
-                            // 角度の補間（逆回転してしまうのを防ぐ処理）
-                            var angleDiff = targetAngle - currAngle
-                            while angleDiff > .pi { angleDiff -= 2 * .pi }
-                            while angleDiff < -.pi { angleDiff += 2 * .pi }
-                            self?.currentAngle = currAngle + angleDiff * smooth
-                            
-                        } else {
-                            // 最初に見つけた時だけは、ワープさせる
-                            self?.currentPosition = targetPosition
-                            self?.currentScale = targetScale
-                            self?.currentAngle = targetAngle
-                        }
-                        
-                        // スムーズに計算された値をARオブジェクトに適用する
-                        self?.markerEntity?.position = self!.currentPosition!
-                        self?.markerEntity?.scale = self!.currentScale!
-                        self?.markerEntity?.orientation = simd_quatf(angle: -(self!.currentAngle!), axis: SIMD3<Float>(0, 1, 0))
-                        
-                        self?.markerEntity?.isEnabled = true
-                    }
-                }
+                let cameraPos = frame.camera.transform.columns.3
+                let anchorPos = cursorAnchor.position
                 
-                request.minimumConfidence = 0.8
-                request.maximumObservations = 1
-                request.minimumSize = 0.3
+                let dx = cameraPos.x - anchorPos.x
+                let dz = cameraPos.z - anchorPos.z
+                let yaw = atan2(dx, dz)
                 
-                let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .right, options: [:])
-                DispatchQueue.global(qos: .userInteractive).async {
-                    try? handler.perform([request])
-                }
+                cursorAnchor.orientation = simd_quatf(angle: yaw, axis: SIMD3<Float>(0, 1, 0))
             }
         }
+    }
 }
 
-// 3D空間の2点間の距離を計算するヘルパー関数
+// 距離計算ヘルパー（今回は使っていませんが残しておいてOKです）
 func distance(_ a: SIMD4<Float>, _ b: SIMD4<Float>) -> Float {
     let dx = a.x - b.x
     let dy = a.y - b.y
