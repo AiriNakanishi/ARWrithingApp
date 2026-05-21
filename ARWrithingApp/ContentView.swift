@@ -52,84 +52,84 @@ struct ARViewContainer: UIViewRepresentable {
         config.planeDetection = [.horizontal]
         arView.session.run(config)
         
-//        //外形表示↓
+        //外形表示↓
+        // ==========================================
+                // 🎨 1. 外形ガイドを並べる
+                // ==========================================
+                let textContainer = Entity()
+                
+                // 🌟 文字ごとの「形」と「サイズ(幅, 高さ)」を自分で自由に設定できるリスト！
+                // ※ 0.015 = 15ミリ(1.5cm)
+                let guideData: [(shape: GuideShape, w: Float, h: Float)] = [
+                    (.rectangle, 0.015, 0.015),        // 1文字目：四角形
+                    (.triangle, 0.018, 0.015),         // 2文字目：三角形（少し幅広）
+                    (.invertedTriangle, 0.015, 0.018), // 3文字目：逆三角形（少し縦長）
+                    (.rhombus, 0.018, 0.018),          // 4文字目：ひし形
+                    (.rectangle, 0.012, 0.015),         // 5文字目：細い四角形
+                    (.trapezoid, 0.015, 0.015)
+                ]
+                
+                let lineThickness: Float = 0.001 // 線の太さ（1mm）
+                let margin: Float = 0.003        // 文字と文字の隙間（3mm）
+                var currentY: Float = 0.0
+                
+                for data in guideData {
+                    // リストに書いた「形・幅・高さ」を使ってガイドを作る
+                    let guideBox = createGuideFrame(shape: data.shape, width: data.w, height: data.h, thickness: lineThickness, color: UIColor.blue.withAlphaComponent(0.5))
+
+                    // 自分の高さの半分だけ下にずらして配置
+                    let posY = currentY - (data.h / 2)
+                    guideBox.position = [0, posY, 0]
+                    
+                    textContainer.addChild(guideBox)
+                    
+                    // 次の文字のために基準位置を下げる
+                    currentY -= (data.h + margin)
+                }
+                
+                // まとめた箱の中心を原点に合わせる
+                let totalBounds = textContainer.visualBounds(relativeTo: nil)
+                textContainer.position = -totalBounds.center
+        
+        //外形表示↑
+        
+////        お手本の文字をなぞる↓
 //        // ==========================================
-//                // 🎨 1. 外形ガイドを並べる
-//                // ==========================================
-//                let textContainer = Entity()
-//                
-//                // 🌟 文字ごとの「形」と「サイズ(幅, 高さ)」を自分で自由に設定できるリスト！
-//                // ※ 0.015 = 15ミリ(1.5cm)
-//                let guideData: [(shape: GuideShape, w: Float, h: Float)] = [
-//                    (.rectangle, 0.015, 0.015),        // 1文字目：四角形
-//                    (.triangle, 0.018, 0.015),         // 2文字目：三角形（少し幅広）
-//                    (.invertedTriangle, 0.015, 0.018), // 3文字目：逆三角形（少し縦長）
-//                    (.rhombus, 0.018, 0.018),          // 4文字目：ひし形
-//                    (.rectangle, 0.012, 0.015),         // 5文字目：細い四角形
-//                    (.trapezoid, 0.015, 0.015)
-//                ]
-//                
-//                let lineThickness: Float = 0.001 // 線の太さ（1mm）
-//                let margin: Float = 0.003        // 文字と文字の隙間（3mm）
-//                var currentY: Float = 0.0
-//                
-//                for data in guideData {
-//                    // リストに書いた「形・幅・高さ」を使ってガイドを作る
-//                    let guideBox = createGuideFrame(shape: data.shape, width: data.w, height: data.h, thickness: lineThickness, color: UIColor.blue.withAlphaComponent(0.5))
-//
-//                    // 自分の高さの半分だけ下にずらして配置
-//                    let posY = currentY - (data.h / 2)
-//                    guideBox.position = [0, posY, 0]
-//                    
-//                    textContainer.addChild(guideBox)
-//                    
-//                    // 次の文字のために基準位置を下げる
-//                    currentY -= (data.h + margin)
-//                }
-//                
-//                // まとめた箱の中心を原点に合わせる
-//                let totalBounds = textContainer.visualBounds(relativeTo: nil)
-//                textContainer.position = -totalBounds.center
+//        // 🎨 1. 縦書きの文字を作る（1文字ずつ並べる）
+//        // ==========================================
+////        let address = "北海道函館市亀田中野町一一六番地二"
+//        let address = "田上下寺目尺"
+//        let textContainer = Entity()
 //        
-//        //外形表示↑
-        
-//        お手本の文字をなぞる↓
-        // ==========================================
-        // 🎨 1. 縦書きの文字を作る（1文字ずつ並べる）
-        // ==========================================
-//        let address = "北海道函館市亀田中野町一一六番地二"
-        let address = "田上下寺目尺"
-        let textContainer = Entity()
-        
-        var textMaterial = UnlitMaterial(color: UIColor.black.withAlphaComponent(0.2))
-        textMaterial.blending = .transparent(opacity: 1.0)
-        
-        let lineSpacing: Float = 0.0088
-        var currentY: Float = 0.0
-        
-        let customFont = UIFont(name: "KleeOne-SemiBold", size: 0.005) ?? UIFont(name: "HiraMinProN-W6", size: 0.008) ?? .systemFont(ofSize: 0.008, weight: .bold)
-        
-        for char in address {
-            let charMesh = MeshResource.generateText(
-                String(char),
-                extrusionDepth: 0.0,
-                font: customFont
-            )
-            let charEntity = ModelEntity(mesh: charMesh, materials: [textMaterial])
-            
-            let charBounds = charEntity.visualBounds(relativeTo: nil)
-            charEntity.position = [
-                -charBounds.center.x,
-                currentY,
-                0
-            ]
-            
-            textContainer.addChild(charEntity)
-            currentY -= lineSpacing
-        }
-        
-        let totalBounds = textContainer.visualBounds(relativeTo: nil)
-        textContainer.position = -totalBounds.center
+//        var textMaterial = UnlitMaterial(color: UIColor.black.withAlphaComponent(0.2))
+//        textMaterial.blending = .transparent(opacity: 1.0)
+//        
+//        let lineSpacing: Float = 0.0088
+//        var currentY: Float = 0.0
+//        
+//        let customFont = UIFont(name: "KleeOne-SemiBold", size: 0.005) ?? UIFont(name: "HiraMinProN-W6", size: 0.008) ?? .systemFont(ofSize: 0.008, weight: .bold)
+//        
+//        for char in address {
+//            let charMesh = MeshResource.generateText(
+//                String(char),
+//                extrusionDepth: 0.0,
+//                font: customFont
+//            )
+//            let charEntity = ModelEntity(mesh: charMesh, materials: [textMaterial])
+//            
+//            let charBounds = charEntity.visualBounds(relativeTo: nil)
+//            charEntity.position = [
+//                -charBounds.center.x,
+//                currentY,
+//                0
+//            ]
+//            
+//            textContainer.addChild(charEntity)
+//            currentY -= lineSpacing
+//        }
+//        
+//        let totalBounds = textContainer.visualBounds(relativeTo: nil)
+//        textContainer.position = -totalBounds.center
         //お手本の文字をなぞる↑
 //
         
