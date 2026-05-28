@@ -11,10 +11,29 @@ import CoreText
 struct ContentView: View {
     @State private var isLocked = false
     
+    // 🌟 追加1: 現在のズーム倍率を保存する変数（初期値は1倍）
+        @State private var currentZoom: CGFloat = 1.0
+        // 🌟 追加2: 指で操作中のズーム倍率を一時的に保持する変数
+        @GestureState private var gestureZoom: CGFloat = 1.0
+    
     var body: some View {
         ZStack {
             ARViewContainer(isLocked: $isLocked)
                 .edgesIgnoringSafeArea(.all)
+            // 🌟 追加3: ARView全体をズーム倍率に合わせて拡大・縮小する
+                            .scaleEffect(currentZoom * gestureZoom)
+                            // 🌟 追加4: 画面全体のピンチ操作（二本指）を受け付ける
+                            .gesture(
+                                MagnificationGesture()
+                                    .updating($gestureZoom) { value, state, _ in
+                                        state = value
+                                    }
+                                    .onEnded { value in
+                                        currentZoom *= value
+                                        // 🌟 縮小しすぎ（1倍未満）や、拡大しすぎ（5倍以上）を防ぐ制限
+                                        currentZoom = max(1.0, min(currentZoom, 5.0))
+                                    }
+                            )
             
             VStack {
                 Spacer()
