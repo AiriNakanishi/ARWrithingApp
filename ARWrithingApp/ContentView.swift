@@ -16,12 +16,38 @@ struct ContentView: View {
         // 🌟 追加2: 指で操作中のズーム倍率を一時的に保持する変数
         @GestureState private var gestureZoom: CGFloat = 1.0
     
+    @State private var currentOffset: CGSize = .zero
+        @GestureState private var gestureOffset: CGSize = .zero
+    let baseParallax = CGSize(width: 30, height: 30)
+//    let baseParallax = CGSize(width: 0, height: 0)
+    
     var body: some View {
         ZStack {
             ARViewContainer(isLocked: $isLocked)
-                .edgesIgnoringSafeArea(.all)
+            
             // 🌟 追加3: ARView全体をズーム倍率に合わせて拡大・縮小する
-                            .scaleEffect(currentZoom * gestureZoom)
+//                .scaleEffect(currentZoom * gestureZoom)
+                .scaleEffect((currentZoom * gestureZoom) * 1.5)
+//                            .offset(x: 100, y: 30)
+                .offset(
+                                    x: baseParallax.width + currentOffset.width + gestureOffset.width,
+                                    y: baseParallax.height + currentOffset.height + gestureOffset.height
+                                )
+                                
+                                // 3. 🌟 追加: 一本指でのドラッグ操作
+                                .gesture(
+                                    DragGesture()
+                                        .updating($gestureOffset) { value, state, _ in
+                                            // 指の移動量を一時変数に反映
+                                            state = value.translation
+                                        }
+                                        .onEnded { value in
+                                            // 指を離した時、その移動量を現在のオフセットに保存して確定する
+                                            currentOffset.width += value.translation.width
+                                            currentOffset.height += value.translation.height
+                                        }
+                                )
+                                .edgesIgnoringSafeArea(.all)
                             // 🌟 追加4: 画面全体のピンチ操作（二本指）を受け付ける
                             .gesture(
                                 MagnificationGesture()
@@ -34,6 +60,9 @@ struct ContentView: View {
                                         currentZoom = max(1.0, min(currentZoom, 5.0))
                                     }
                             )
+                            .animation(.interactiveSpring(response: 0.3, dampingFraction: 0.8), value: gestureOffset)
+                                            .animation(.interactiveSpring(response: 0.3, dampingFraction: 0.8), value: gestureZoom)
+                                            .animation(.easeOut(duration: 0.2), value: currentZoom)
             
             VStack {
                 Spacer()
@@ -42,15 +71,15 @@ struct ContentView: View {
                 }) {
                     Text(isLocked ? "解除" : "固定")
                         .font(.title2)
-                        .fontWeight(.bold)
+                        .fontWeight(.semibold)
                         .foregroundColor(.white)
                         .padding()
-                        .frame(width: 200)
-                        .background(isLocked ? Color.red : Color.blue)
+                        .frame(width: 100, height: 30)
+                        .background(isLocked ? Color.red.opacity(0.3) : Color.blue.opacity(0.3) )
                         .cornerRadius(15)
                         .shadow(radius: 5)
                 }
-                .padding(.bottom, 50)
+                .padding(.bottom, -20)
             }
         }
     }
@@ -61,6 +90,8 @@ struct ARViewContainer: UIViewRepresentable {
     
     func makeUIView(context: Context) -> ARView {
         let arView = ARView(frame: .zero)
+        
+        arView.renderOptions.insert(.disableGroundingShadows)
         
         let config = ARWorldTrackingConfiguration()
         config.planeDetection = [.horizontal]
