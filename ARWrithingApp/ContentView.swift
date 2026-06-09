@@ -1,8 +1,3 @@
-//
-//  ContentView.swift
-//  ARWrithingApp
-//
-
 import SwiftUI
 import RealityKit
 import ARKit
@@ -88,11 +83,11 @@ struct ARViewContainer: UIViewRepresentable {
         let targetText = "北海道函館市亀田中野町一一六番地二"
         
         let lineThickness: Float = 0.0005
-        let fixedLineSpacing: Float = 0.010 // 文字間隔（1cm）
+        let fixedLineSpacing: Float = 0.012
         
-        // 🌟 左右のレイアウト用のX座標を設定
-        let leftXOffset: Float = -0.015  // 左側：お手本（-1.5cm）
-        let rightXOffset: Float = 0.015  // 右側：枠とガイド（+1.5cm）
+        let leftXOffset: Float = -0.015
+        let rightXOffset: Float = 0.015
+        let fixedBoxSize: Float = 0.012
         
         var currentY: Float = 0.0
         
@@ -100,15 +95,10 @@ struct ARViewContainer: UIViewRepresentable {
                   ?? UIFont(name: "HiraMinProN-W6", size: 0.010)
                   ?? .systemFont(ofSize: 0.015, weight: .bold)
         
-        let ctFont = CTFontCreateWithName(uiFont.fontName as CFString, 100, nil)
-        
         var textMaterial = UnlitMaterial(color: UIColor.black.withAlphaComponent(0.8))
         textMaterial.blending = .transparent(opacity: 1.0)
         
         for char in targetText {
-            // 文字の幅と高さを計算
-            let metrics = getCharacterMetrics(char: char, font: ctFont)
-            
             // ==========================================
             // 🎨 ① 左側：お手本文字の描画
             // ==========================================
@@ -124,51 +114,84 @@ struct ARViewContainer: UIViewRepresentable {
             textContainer.addChild(charEntity)
             
             // ==========================================
-            // 🎨 ② 右側：シンプルな文字の枠（長方形）
+            // 🎨 ② 右側：均等な正方形の枠 ＋ 点線の十字ガイド
             // ==========================================
             let frameEntity = createRectangularFrame(
-                width: metrics.width,
-                height: metrics.height,
+                width: fixedBoxSize,
+                height: fixedBoxSize,
                 thickness: lineThickness,
-                color: UIColor.gray.withAlphaComponent(0.4) // 枠は邪魔にならない薄いグレー
+                color: UIColor.gray.withAlphaComponent(0.3)
             )
             frameEntity.position = [rightXOffset, currentY, 0]
             textContainer.addChild(frameEntity)
             
-            // ==========================================
-            // 🎨 ③ 右側：KanjiVGベースのガイド線（枠の中）
-            // ==========================================
-            let guideType = getKanjiVGMockGuide(for: char)
-            let guideHeight = metrics.height // 🌟 ガイド線の長さを文字枠の高さに合わせる
+            let crosshairColor = UIColor.gray.withAlphaComponent(0.4)
+            let vDashedLine = createDashedLineEntity(
+                from: SIMD3<Float>(rightXOffset, currentY + fixedBoxSize / 2, 0),
+                to: SIMD3<Float>(rightXOffset, currentY - fixedBoxSize / 2, 0),
+                thickness: lineThickness * 0.8, color: crosshairColor
+            )
+            let hDashedLine = createDashedLineEntity(
+                from: SIMD3<Float>(rightXOffset - fixedBoxSize / 2, currentY, 0),
+                to: SIMD3<Float>(rightXOffset + fixedBoxSize / 2, currentY, 0),
+                thickness: lineThickness * 0.8, color: crosshairColor
+            )
+            textContainer.addChild(vDashedLine)
+            textContainer.addChild(hDashedLine)
             
-            if case let .henTsukuri(splitX) = guideType {
-                let boundaryLine = createLineEntity(
-                    from: SIMD3<Float>(rightXOffset + splitX, currentY + guideHeight / 2, 0),
-                    to: SIMD3<Float>(rightXOffset + splitX, currentY - guideHeight / 2, 0),
-                    thickness: lineThickness,
-                    color: UIColor.blue.withAlphaComponent(0.8)
-                )
-                textContainer.addChild(boundaryLine)
-            }
-            else if case let .center(centerX) = guideType {
-                let centerLine = createLineEntity(
-                    from: SIMD3<Float>(rightXOffset + centerX, currentY + guideHeight / 2, 0),
-                    to: SIMD3<Float>(rightXOffset + centerX, currentY - guideHeight / 2, 0),
-                    thickness: lineThickness,
-                    color: UIColor.green.withAlphaComponent(0.8)
-                )
-                textContainer.addChild(centerLine)
+            // ==========================================
+            // 🎨 ③ 動的ガイド線の描画（透明度0.4に設定）
+            // ==========================================
+            let guideType = KanjiVGManager.shared.getGuide(for: char, boxWidth: fixedBoxSize, boxHeight: fixedBoxSize)
+            
+            let drawGuides = { (baseX: Float) in
+                if case let .henTsukuri(splitX) = guideType {
+                    let boundaryLine = createLineEntity(from: SIMD3<Float>(baseX + splitX, currentY + fixedBoxSize / 2, 0),
+                                                        to: SIMD3<Float>(baseX + splitX, currentY - fixedBoxSize / 2, 0),
+                                                        thickness: lineThickness * 1.5, color: UIColor.blue.withAlphaComponent(0.4))
+                    textContainer.addChild(boundaryLine)
+                }
+                else if case let .center(centerX) = guideType {
+                    let centerLine = createLineEntity(from: SIMD3<Float>(baseX + centerX, currentY + fixedBoxSize / 2, 0),
+                                                      to: SIMD3<Float>(baseX + centerX, currentY - fixedBoxSize / 2, 0),
+                                                      thickness: lineThickness * 1.5, color: UIColor.green.withAlphaComponent(0.4))
+                    textContainer.addChild(centerLine)
+                }
+                else if case let .shinnyo(splitX, bottomY) = guideType {
+                    let vLine = createLineEntity(from: SIMD3<Float>(baseX + splitX, currentY + fixedBoxSize / 2, 0),
+                                                 to: SIMD3<Float>(baseX + splitX, currentY + bottomY, 0),
+                                                 thickness: lineThickness * 1.5, color: UIColor.orange.withAlphaComponent(0.4))
+                    let hLine = createLineEntity(from: SIMD3<Float>(baseX + splitX, currentY + bottomY, 0),
+                                                 to: SIMD3<Float>(baseX + fixedBoxSize / 2, currentY + bottomY, 0),
+                                                 thickness: lineThickness * 1.5, color: UIColor.orange.withAlphaComponent(0.4))
+                    textContainer.addChild(vLine)
+                    textContainer.addChild(hLine)
+                }
+                else if case let .kamae(leftX, rightX, topY, bottomY) = guideType {
+                    let leftLine = createLineEntity(from: SIMD3<Float>(baseX + leftX, currentY + topY, 0),
+                                                    to: SIMD3<Float>(baseX + leftX, currentY + bottomY, 0),
+                                                    thickness: lineThickness * 1.5, color: UIColor.purple.withAlphaComponent(0.4))
+                    let rightLine = createLineEntity(from: SIMD3<Float>(baseX + rightX, currentY + topY, 0),
+                                                     to: SIMD3<Float>(baseX + rightX, currentY + bottomY, 0),
+                                                     thickness: lineThickness * 1.5, color: UIColor.purple.withAlphaComponent(0.4))
+                    let bottomLine = createLineEntity(from: SIMD3<Float>(baseX + leftX, currentY + bottomY, 0),
+                                                      to: SIMD3<Float>(baseX + rightX, currentY + bottomY, 0),
+                                                      thickness: lineThickness * 1.5, color: UIColor.purple.withAlphaComponent(0.4))
+                    textContainer.addChild(leftLine)
+                    textContainer.addChild(rightLine)
+                    textContainer.addChild(bottomLine)
+                }
             }
             
-            // 次の文字へ
+            drawGuides(rightXOffset)
+            drawGuides(leftXOffset)
+            
             currentY -= fixedLineSpacing
         }
         
-        // まとめた箱の中心を原点に合わせる
         let totalBounds = textContainer.visualBounds(relativeTo: nil)
         textContainer.position = -totalBounds.center
         
-        // 文字を寝かせる処理
         let flatWrapper = Entity()
         flatWrapper.addChild(textContainer)
         flatWrapper.transform.rotation = simd_quatf(angle: -.pi / 2, axis: SIMD3<Float>(1, 0, 0))
@@ -220,56 +243,17 @@ struct ARViewContainer: UIViewRepresentable {
 // 📦 各種計算・生成関数
 // ==========================================
 
-/// 🌟 更新：文字の外接矩形（バウンディングボックス）の幅と高さのみを取得する関数
-func getCharacterMetrics(char: Character, font: CTFont) -> (width: Float, height: Float) {
-    var glyphs = [CGGlyph](repeating: 0, count: 1)
-    let uniChars = Array(String(char).utf16)
-    let success = CTFontGetGlyphsForCharacters(font, uniChars, &glyphs, 1)
-    
-    guard success, let path = CTFontCreatePathForGlyph(font, glyphs[0], nil) else {
-        return (0.015, 0.015)
-    }
-    
-    let bounds = path.boundingBoxOfPath
-    let arScale: CGFloat = 0.00010
-    
-    let width = Float(bounds.width * arScale)
-    let height = Float(bounds.height * arScale)
-    
-    // 最低でも1.5mm角のサイズを保証する
-    return (max(width, 0.0015), max(height, 0.0015))
-}
-
-/// ガイドの種類を定義するEnum
-enum GuideType {
-    case henTsukuri(splitX: Float)
-    case center(centerX: Float)
-    case none
-}
-
-/// KanjiVGのデータから計算された「境界線」の位置を返すモック関数
-func getKanjiVGMockGuide(for char: Character) -> GuideType {
-    switch char {
-    case "海": return .henTsukuri(splitX: -0.0015)
-    case "館": return .henTsukuri(splitX: -0.001)
-    case "町": return .henTsukuri(splitX: -0.0005)
-    case "野": return .henTsukuri(splitX: -0.001)
-        
-    case "北": return .center(centerX: 0.0)
-    case "中": return .center(centerX: 0.0)
-        
-    default: return .none
-    }
-}
-
-// 線を描画する関数
-func createLineEntity(from p1: SIMD3<Float>, to p2: SIMD3<Float>, thickness: Float, color: UIColor, opacity: CGFloat = 1.0) -> ModelEntity {
+// 🌟 透明度バグを修正した描画関数
+func createLineEntity(from p1: SIMD3<Float>, to p2: SIMD3<Float>, thickness: Float, color: UIColor) -> ModelEntity {
     let dx = p2.x - p1.x, dy = p2.y - p1.y
     let length = sqrt(dx*dx + dy*dy)
     let mesh = MeshResource.generateBox(size: [length, thickness, 0.0001])
     
-    var material = UnlitMaterial(color: color.withAlphaComponent(opacity))
-    if color.cgColor.alpha < 1.0 || opacity < 1.0 { material.blending = .transparent(opacity: 1.0) }
+    // カラーの透明度をそのままマテリアルに反映させるように修正
+    var material = UnlitMaterial(color: color)
+    if color.cgColor.alpha < 1.0 {
+        material.blending = .transparent(opacity: 1.0)
+    }
     
     let line = ModelEntity(mesh: mesh, materials: [material])
     line.position = [(p1.x + p2.x) / 2, (p1.y + p2.y) / 2, 0]
@@ -277,7 +261,34 @@ func createLineEntity(from p1: SIMD3<Float>, to p2: SIMD3<Float>, thickness: Flo
     return line
 }
 
-/// 🌟 新規：シンプルな四角形（枠）を描画する関数
+func createDashedLineEntity(from p1: SIMD3<Float>, to p2: SIMD3<Float>, thickness: Float, color: UIColor, dashLength: Float = 0.001, gapLength: Float = 0.001) -> Entity {
+    let parentEntity = Entity()
+    let dx = p2.x - p1.x
+    let dy = p2.y - p1.y
+    let totalLength = sqrt(dx*dx + dy*dy)
+    let dirX = dx / totalLength
+    let dirY = dy / totalLength
+    
+    var currentDist: Float = 0
+    while currentDist < totalLength {
+        let segmentEnd = min(currentDist + dashLength, totalLength)
+        let startPoint = SIMD3<Float>(p1.x + dirX * currentDist, p1.y + dirY * currentDist, p1.z)
+        let endPoint = SIMD3<Float>(p1.x + dirX * segmentEnd, p1.y + dirY * segmentEnd, p1.z)
+        
+        let mesh = MeshResource.generateBox(size: [segmentEnd - currentDist, thickness, 0.0001])
+        var material = UnlitMaterial(color: color)
+        if color.cgColor.alpha < 1.0 { material.blending = .transparent(opacity: 1.0) }
+        
+        let line = ModelEntity(mesh: mesh, materials: [material])
+        line.position = [(startPoint.x + endPoint.x) / 2, (startPoint.y + endPoint.y) / 2, 0]
+        line.orientation = simd_quatf(angle: atan2(dy, dx), axis: [0, 0, 1])
+        
+        parentEntity.addChild(line)
+        currentDist += dashLength + gapLength
+    }
+    return parentEntity
+}
+
 func createRectangularFrame(width: Float, height: Float, thickness: Float, color: UIColor) -> Entity {
     let frame = Entity()
     let w = width / 2
@@ -294,12 +305,8 @@ func createRectangularFrame(width: Float, height: Float, thickness: Float, color
     ]
     
     for lp in lines {
-        frame.addChild(createLineEntity(from: lp.0, to: lp.1, thickness: thickness, color: color, opacity: color.cgColor.alpha))
+        frame.addChild(createLineEntity(from: lp.0, to: lp.1, thickness: thickness, color: color))
     }
     
     return frame
-}
-
-#Preview {
-    ContentView()
 }
