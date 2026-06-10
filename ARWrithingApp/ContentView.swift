@@ -3,19 +3,20 @@ import RealityKit
 import ARKit
 import CoreText
 
-// 🌟 実験の条件をボタンで切り替えるための列挙型
+// 🌟 モードに「始点」を追加
 enum GuideMode: String, CaseIterable, Identifiable {
     case nazoru = "なぞる"
     case gaikei = "外形"
     case daikei = "台形"
     case henTsukuri = "へんとつくり"
+    case shiten = "始点"
     
     var id: String { self.rawValue }
 }
 
 struct ContentView: View {
     @State private var isLocked = false
-    @State private var selectedMode: GuideMode = .gaikei // 🌟 テストしやすいよう初期値を「外形」に変更
+    @State private var selectedMode: GuideMode = .shiten // 🌟 テスト用に初期値を「始点」に
     
     @State private var currentZoom: CGFloat = 1.0
     @GestureState private var gestureZoom: CGFloat = 1.0
@@ -158,25 +159,10 @@ struct ARViewContainer: UIViewRepresentable {
             var traceMaterial = UnlitMaterial(color: UIColor.black.withAlphaComponent(0.2))
             traceMaterial.blending = .transparent(opacity: 1.0)
             
-            // 🌟 Pythonの解析結果に基づいた外形データの配列
             let gaikeiShapes: [GuideShape] = [
-                .triangle,     // 北
-                .square,       // 海
-                .square,       // 道
-                .square,       // 函
-                .square,       // 館
-                .inv_triangle, // 市
-                .trapezoid,    // 亀
-                .square,       // 田
-                .tall_rect,    // 中
-                .square,       // 野
-                .inv_triangle, // 町
-                .wide_rect,    // 一
-                .wide_rect,    // 一
-                .triangle,     // 六
-                .square,       // 番
-                .trapezoid,    // 地
-                .wide_rect     // 二
+                .triangle, .square, .square, .square, .square, .inv_triangle, .trapezoid,
+                .square, .tall_rect, .square, .inv_triangle, .wide_rect, .wide_rect,
+                .triangle, .square, .trapezoid, .wide_rect
             ]
             
             for (index, char) in targetText.enumerated() {
@@ -208,16 +194,10 @@ struct ARViewContainer: UIViewRepresentable {
                     
                 case .gaikei:
                     let shape = gaikeiShapes[index % gaikeiShapes.count]
-                    
-                    // 🌟 図形の比率調整（wide_rectとtall_rect用）
                     var shapeW = fixedBoxSize
                     var shapeH = fixedBoxSize
-                    
-                    if shape == .wide_rect {
-                        shapeH = fixedBoxSize * 0.45 // 一、二などに合わせて高さを半分以下に
-                    } else if shape == .tall_rect {
-                        shapeW = fixedBoxSize * 0.6  // 中などに合わせて幅を細く
-                    }
+                    if shape == .wide_rect { shapeH = fixedBoxSize * 0.45 }
+                    else if shape == .tall_rect { shapeW = fixedBoxSize * 0.6 }
                     
                     let gaikeiFrame = createGuideFrame(shape: shape, width: shapeW, height: shapeH, thickness: lineThickness * 1.5, color: UIColor.blue.withAlphaComponent(0.4))
                     gaikeiFrame.position = [rightXOffset, currentY, 0]
@@ -254,6 +234,26 @@ struct ARViewContainer: UIViewRepresentable {
                     }
                     drawGuides(rightXOffset)
                     drawGuides(leftXOffset)
+                    
+                case .shiten:
+                                    // 🌟 5. 始点：一画ごとの始まりに半透明の赤いドット（球体）を配置
+                                    let strokeStarts = KanjiVGManager.shared.getStrokeStarts(for: char, boxWidth: fixedBoxSize, boxHeight: fixedBoxSize)
+                                    let drawDots = { (baseX: Float) in
+                                        for point in strokeStarts {
+                                            let dotMesh = MeshResource.generateSphere(radius: 0.0006) // 0.6ミリの小さな球
+                                            
+                                            // 🌟 変更ポイント：0.8だった透明度を、他のガイドと同じ 0.4 に下げて透けさせました
+                                            var dotMat = UnlitMaterial(color: UIColor.red.withAlphaComponent(0.4))
+                                            dotMat.blending = .transparent(opacity: 1.0)
+                                            let dotEntity = ModelEntity(mesh: dotMesh, materials: [dotMat])
+                                            
+                                            // 枠の中の正しい位置に配置（ちらつき防止のため0.0002浮かせます）
+                                            dotEntity.position = [baseX + point.x, currentY + point.y, 0.0002]
+                                            textContainer.addChild(dotEntity)
+                                        }
+                                    }
+                                    drawDots(rightXOffset)
+                                    drawDots(leftXOffset)
                 }
                 
                 currentY -= fixedLineSpacing
@@ -293,27 +293,17 @@ struct ARViewContainer: UIViewRepresentable {
 // ==========================================
 // 📦 統合ヘルパー・図形生成関数スタック
 // ==========================================
-
-// 🌟 新しくPythonの7分類に合わせたEnum定義
-enum GuideShape {
-    case square, triangle, inv_triangle, rhombus, trapezoid, tall_rect, wide_rect
-}
+enum GuideShape { case square, triangle, inv_triangle, rhombus, trapezoid, tall_rect, wide_rect }
 
 func getCharacterMetrics(char: Character, font: CTFont) -> (topWidth: Float, bottomWidth: Float, height: Float) {
     var glyphs = [CGGlyph](repeating: 0, count: 1)
     let uniChars = Array(String(char).utf16)
     let success = CTFontGetGlyphsForCharacters(font, uniChars, &glyphs, 1)
-    
-    guard success, let path = CTFontCreatePathForGlyph(font, glyphs[0], nil) else {
-        return (0.012, 0.012, 0.012)
-    }
-    
+    guard success, let path = CTFontCreatePathForGlyph(font, glyphs[0], nil) else { return (0.012, 0.012, 0.012) }
     let bounds = path.boundingBoxOfPath
     let midY = bounds.midY
-    
     var topMinX = bounds.maxX, topMaxX = bounds.minX
     var bottomMinX = bounds.maxX, bottomMaxX = bounds.minX
-    
     path.applyWithBlock { elementPointer in
         let element = elementPointer.pointee
         let points = element.points
@@ -327,22 +317,16 @@ func getCharacterMetrics(char: Character, font: CTFont) -> (topWidth: Float, bot
         }
         for i in 0..<numPoints {
             let p = points[i]
-            if p.y >= midY {
-                topMinX = min(topMinX, p.x); topMaxX = max(topMaxX, p.x)
-            } else {
-                bottomMinX = min(bottomMinX, p.x); bottomMaxX = max(bottomMaxX, p.x)
-            }
+            if p.y >= midY { topMinX = min(topMinX, p.x); topMaxX = max(topMaxX, p.x) }
+            else { bottomMinX = min(bottomMinX, p.x); bottomMaxX = max(bottomMaxX, p.x) }
         }
     }
-    
     if topMinX > topMaxX { topMinX = bounds.midX; topMaxX = bounds.midX }
     if bottomMinX > bottomMaxX { bottomMinX = bounds.midX; bottomMaxX = bounds.midX }
-    
     let arScale: CGFloat = 0.00010
     let tWidth = Float((topMaxX - topMinX) * arScale)
     let bWidth = Float((bottomMaxX - bottomMinX) * arScale)
     let height = Float(bounds.height * arScale)
-    
     return (max(tWidth, 0.0015), max(bWidth, 0.0015), max(height, 0.0015))
 }
 
@@ -350,10 +334,8 @@ func createLineEntity(from p1: SIMD3<Float>, to p2: SIMD3<Float>, thickness: Flo
     let dx = p2.x - p1.x, dy = p2.y - p1.y
     let length = sqrt(dx*dx + dy*dy)
     let mesh = MeshResource.generateBox(size: [length, thickness, 0.0001])
-    
     var material = UnlitMaterial(color: color)
     if color.cgColor.alpha < 1.0 { material.blending = .transparent(opacity: 1.0) }
-    
     let line = ModelEntity(mesh: mesh, materials: [material])
     line.position = [(p1.x + p2.x) / 2, (p1.y + p2.y) / 2, 0]
     line.orientation = simd_quatf(angle: atan2(dy, dx), axis: [0, 0, 1])
@@ -365,21 +347,17 @@ func createDashedLineEntity(from p1: SIMD3<Float>, to p2: SIMD3<Float>, thicknes
     let dx = p2.x - p1.x, dy = p2.y - p1.y
     let totalLength = sqrt(dx*dx + dy*dy)
     let dirX = dx / totalLength, dirY = dy / totalLength
-    
     var currentDist: Float = 0
     while currentDist < totalLength {
         let segmentEnd = min(currentDist + dashLength, totalLength)
         let startPoint = SIMD3<Float>(p1.x + dirX * currentDist, p1.y + dirY * currentDist, p1.z)
         let endPoint = SIMD3<Float>(p1.x + dirX * segmentEnd, p1.y + dirY * segmentEnd, p1.z)
-        
         let mesh = MeshResource.generateBox(size: [segmentEnd - currentDist, thickness, 0.0001])
         var material = UnlitMaterial(color: color)
         if color.cgColor.alpha < 1.0 { material.blending = .transparent(opacity: 1.0) }
-        
         let line = ModelEntity(mesh: mesh, materials: [material])
         line.position = [(startPoint.x + endPoint.x) / 2, (startPoint.y + endPoint.y) / 2, 0]
         line.orientation = simd_quatf(angle: atan2(dy, dx), axis: [0, 0, 1])
-        
         parentEntity.addChild(line)
         currentDist += dashLength + gapLength
     }
@@ -392,9 +370,7 @@ func createRectangularFrame(width: Float, height: Float, thickness: Float, color
     let topLeft = SIMD3<Float>(-w, h, 0), topRight = SIMD3<Float>(w, h, 0)
     let bottomLeft = SIMD3<Float>(-w, -h, 0), bottomRight = SIMD3<Float>(w, -h, 0)
     let lines = [(topLeft, topRight), (topRight, bottomRight), (bottomRight, bottomLeft), (bottomLeft, topLeft)]
-    for lp in lines {
-        frame.addChild(createLineEntity(from: lp.0, to: lp.1, thickness: thickness, color: color))
-    }
+    for lp in lines { frame.addChild(createLineEntity(from: lp.0, to: lp.1, thickness: thickness, color: color)) }
     return frame
 }
 
@@ -405,26 +381,15 @@ func createGuideFrame(shape: GuideShape, width: Float, height: Float, thickness:
     let bottomLeft = SIMD3<Float>(-width / 2, -height / 2, 0), bottomRight = SIMD3<Float>(width / 2, -height / 2, 0)
     let left = SIMD3<Float>(-width / 2, 0, 0), right = SIMD3<Float>(width / 2, 0, 0)
     let trapezoidTopLeft = SIMD3<Float>(-width / 4, height / 2, 0), trapezoidTopRight = SIMD3<Float>(width / 4, height / 2, 0)
-    
     var lines: [(SIMD3<Float>, SIMD3<Float>)] = []
-    
-    // 🌟 新しい7分類に対する線の引き方
     switch shape {
-    case .square, .tall_rect, .wide_rect: // 四角形グループ
-        lines = [(topLeft, topRight), (topRight, bottomRight), (bottomRight, bottomLeft), (bottomLeft, topLeft)]
-    case .triangle: // 三角形（北・六など）
-        lines = [(top, bottomRight), (bottomRight, bottomLeft), (bottomLeft, top)]
-    case .inv_triangle: // 逆三角形（市・町など）
-        lines = [(topLeft, topRight), (topRight, bottom), (bottom, topLeft)]
-    case .rhombus: // ひし形
-        lines = [(top, right), (right, bottom), (bottom, left), (left, top)]
-    case .trapezoid: // 台形（亀・地など）
-        lines = [(trapezoidTopLeft, trapezoidTopRight), (trapezoidTopRight, bottomRight), (bottomRight, bottomLeft), (bottomLeft, trapezoidTopLeft)]
+    case .square, .tall_rect, .wide_rect: lines = [(topLeft, topRight), (topRight, bottomRight), (bottomRight, bottomLeft), (bottomLeft, topLeft)]
+    case .triangle: lines = [(top, bottomRight), (bottomRight, bottomLeft), (bottomLeft, top)]
+    case .inv_triangle: lines = [(topLeft, topRight), (topRight, bottom), (bottom, topLeft)]
+    case .rhombus: lines = [(top, right), (right, bottom), (bottom, left), (left, top)]
+    case .trapezoid: lines = [(trapezoidTopLeft, trapezoidTopRight), (trapezoidTopRight, bottomRight), (bottomRight, bottomLeft), (bottomLeft, trapezoidTopLeft)]
     }
-    
-    for lp in lines {
-        frame.addChild(createLineEntity(from: lp.0, to: lp.1, thickness: thickness, color: color))
-    }
+    for lp in lines { frame.addChild(createLineEntity(from: lp.0, to: lp.1, thickness: thickness, color: color)) }
     return frame
 }
 
@@ -433,8 +398,6 @@ func createDynamicTrapezoid(topWidth: Float, bottomWidth: Float, height: Float, 
     let topLeft = SIMD3<Float>(-topWidth / 2, height / 2, 0), topRight = SIMD3<Float>(topWidth / 2, height / 2, 0)
     let bottomLeft = SIMD3<Float>(-bottomWidth / 2, -height / 2, 0), bottomRight = SIMD3<Float>(bottomWidth / 2, -height / 2, 0)
     let lines = [(topLeft, topRight), (topRight, bottomRight), (bottomRight, bottomLeft), (bottomLeft, topLeft)]
-    for lp in lines {
-        frame.addChild(createLineEntity(from: lp.0, to: lp.1, thickness: thickness, color: color))
-    }
+    for lp in lines { frame.addChild(createLineEntity(from: lp.0, to: lp.1, thickness: thickness, color: color)) }
     return frame
 }

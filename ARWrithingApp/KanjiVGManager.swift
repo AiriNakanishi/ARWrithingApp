@@ -63,7 +63,6 @@ class KanjiVGManager: NSObject, XMLParserDelegate {
             return boxHeight / 2.0 - (boxHeight * ratio)
         }
         
-        // --- 各漢字のガイド判定（例外ルールを全削除！） ---
         if nyoBox.isValid && innerBox.isValid {
             return .shinnyo(splitX: toIosX(innerBox.minX - 1.0), bottomY: toIosY(innerBox.maxY + 1.0))
         }
@@ -71,11 +70,7 @@ class KanjiVGManager: NSObject, XMLParserDelegate {
             return .kamae(leftX: toIosX(innerBox.minX - 2.0), rightX: toIosX(innerBox.maxX + 2.0),
                           topY: toIosY(innerBox.minY - 2.0), bottomY: toIosY(innerBox.maxY + 2.0))
         }
-        
-        // 🌟 ここにあった「北」と「中」の勝手な例外判定を完全に削除しました！
-        
         if leftBox.isValid && rightBox.isValid {
-            // 「北」もここの計算ルートに乗り、データに基づいた青い線が出力されます
             let midX = (leftBox.maxX + rightBox.minX) / 2.0
             return .henTsukuri(splitX: toIosX(midX))
         }
@@ -83,8 +78,41 @@ class KanjiVGManager: NSObject, XMLParserDelegate {
         return .none
     }
     
+    // 🌟 新機能：漢字の一画ごとの「始点」座標を抽出する関数
+    func getStrokeStarts(for char: Character, boxWidth: Float, boxHeight: Float) -> [SIMD2<Float>] {
+        guard let unicodeScalar = char.unicodeScalars.first else { return [] }
+        let hexString = String(format: "%05x", unicodeScalar.value)
+        
+        // ファイルのテキストを直接読み込む
+        guard let url = Bundle.main.url(forResource: hexString, withExtension: "svg", subdirectory: "kanjivg")
+                     ?? Bundle.main.url(forResource: hexString, withExtension: "svg"),
+              let content = try? String(contentsOf: url) else { return [] }
+        
+        // 正規表現で <path d="M(x座標),(y座標)... の部分だけを高速に抽出
+        let pattern = "d=\"[Mm]\\s*([0-9.-]+)[,\\s]+([0-9.-]+)"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let matches = regex.matches(in: content, range: NSRange(content.startIndex..., in: content))
+        
+        let kvgCanvasSize: Float = 109.0
+        var points: [SIMD2<Float>] = []
+        
+        for match in matches {
+            if let xRange = Range(match.range(at: 1), in: content),
+               let yRange = Range(match.range(at: 2), in: content),
+               let xVal = Float(content[xRange]),
+               let yVal = Float(content[yRange]) {
+                
+                // ARの枠サイズに合わせて等倍マッピング
+                let iosX = -boxWidth / 2.0 + (boxWidth * (xVal / kvgCanvasSize))
+                let iosY = boxHeight / 2.0 - (boxHeight * (yVal / kvgCanvasSize))
+                points.append(SIMD2<Float>(iosX, iosY))
+            }
+        }
+        return points
+    }
+    
     // ==========================================
-    // 📦 XMLパーサー・座標抽出処理
+    // 📦 XMLパーサー処理
     // ==========================================
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String : String] = [:]) {
         if elementName == "g" {
