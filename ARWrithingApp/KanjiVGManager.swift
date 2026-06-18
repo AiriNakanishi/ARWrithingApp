@@ -1,4 +1,5 @@
 import Foundation
+import simd
 
 enum GuideType {
     case henTsukuri(splitX: Float)
@@ -66,7 +67,7 @@ class KanjiVGManager: NSObject, XMLParserDelegate {
         let hexString = String(format: "%05x", unicodeScalar.value)
         guard let url = Bundle.main.url(forResource: hexString, withExtension: "svg", subdirectory: "kanjivg")
                      ?? Bundle.main.url(forResource: hexString, withExtension: "svg"),
-              let content = try? String(contentsOf: url) else { return [] }
+              let content = try? String(contentsOf: url, encoding: .utf8) else { return [] }
         
         let pattern = "d=\"[Mm]\\s*([0-9.-]+)[,\\s]+([0-9.-]+)"
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
@@ -85,62 +86,120 @@ class KanjiVGManager: NSObject, XMLParserDelegate {
         return points
     }
     
-    // 🌟 新機能：「交点」を数学的に計算して抽出する最強のアルゴリズム
+    // 🌟 完全修復版：「クロス交差」「T字接点」「L字角」のみを抽出する最強アルゴリズム
     func getIntersections(for char: Character, boxWidth: Float, boxHeight: Float) -> [SIMD2<Float>] {
         guard let unicodeScalar = char.unicodeScalars.first else { return [] }
         let hexString = String(format: "%05x", unicodeScalar.value)
+        
+        // 🚨 前回消してしまっていた「?? Bundle.main...」を復活！（これでファイルが確実に読まれます）
         guard let url = Bundle.main.url(forResource: hexString, withExtension: "svg", subdirectory: "kanjivg")
                      ?? Bundle.main.url(forResource: hexString, withExtension: "svg"),
-              let content = try? String(contentsOf: url) else { return [] }
+              let content = try? String(contentsOf: url, encoding: .utf8) else { return [] }
 
-        // ファイルから全ての <path d="..."> を抽出
         let pathPattern = "<path[^>]*d=\"([^\"]+)\""
         guard let regex = try? NSRegularExpression(pattern: pathPattern) else { return [] }
         let matches = regex.matches(in: content, range: NSRange(content.startIndex..., in: content))
 
         var allStrokes: [[SIMD2<Float>]] = []
+        var allAnchors: [[SIMD2<Float>]] = []
         let kvgCanvasSize: Float = 109.0
 
         for match in matches {
             if let dRange = Range(match.range(at: 1), in: content) {
                 let d = String(content[dRange])
-                let strokePoints = parsePolyline(from: d)
-                if strokePoints.count > 1 { allStrokes.append(strokePoints) }
+                let parsed = parsePolylineAndAnchors(from: d)
+                if parsed.polyline.count > 1 {
+                    allStrokes.append(parsed.polyline)
+                    allAnchors.append(parsed.anchors)
+                }
             }
         }
 
-        var intersections: [SIMD2<Float>] = []
+        var rawPoints: [SIMD2<Float>] = []
+        let touchTolerance: Float = 3.5 // 接触を判定する許容距離
 
-        // 画と画の総当たり交差判定（O(N^2)の線分交差チェック）
+        // ① クロス交差点の抽出（×の交わり）
         if allStrokes.count >= 2 {
             for i in 0..<allStrokes.count {
                 for j in (i+1)..<allStrokes.count {
                     let strokeA = allStrokes[i]
                     let strokeB = allStrokes[j]
-
                     for a in 0..<(strokeA.count - 1) {
                         for b in 0..<(strokeB.count - 1) {
                             if let intersect = segmentsIntersect(p1: strokeA[a], p2: strokeA[a+1], p3: strokeB[b], p4: strokeB[b+1]) {
-                                // AR用の座標系に等倍マッピング
-                                let iosX = -boxWidth / 2.0 + (boxWidth * (intersect.x / kvgCanvasSize))
-                                let iosY = boxHeight / 2.0 - (boxHeight * (intersect.y / kvgCanvasSize))
-                                let pt = SIMD2<Float>(iosX, iosY)
-
-                                // 重複（近すぎる点）の排除
-                                if !intersections.contains(where: { distance($0, pt) < 0.001 }) {
-                                    intersections.append(pt)
-                                }
+                                rawPoints.append(intersect)
                             }
                         }
                     }
                 }
             }
         }
-        return intersections
+
+        // ② T字・結合部の抽出（線の端点が別の線に接触している場合のみ追加）
+        for i in 0..<allStrokes.count {
+            let stroke = allStrokes[i]
+            if let first = stroke.first, touchesAnotherStroke(p: first, myIndex: i, strokes: allStrokes, tolerance: touchTolerance) {
+                rawPoints.append(first)
+            }
+            if let last = stroke.last, touchesAnotherStroke(p: last, myIndex: i, strokes: allStrokes, tolerance: touchTolerance) {
+                rawPoints.append(last)
+            }
+        }
+
+        // ③ L字の角（コーナー）の抽出
+        for anchors in allAnchors {
+            if anchors.count >= 3 {
+                for k in 1..<(anchors.count - 1) {
+                    let p0 = anchors[k-1]
+                    let p1 = anchors[k]
+                    let p2 = anchors[k+1]
+                    let v1 = SIMD2<Float>(p1.x - p0.x, p1.y - p0.y)
+                    let v2 = SIMD2<Float>(p2.x - p1.x, p2.y - p1.y)
+                    let len1 = sqrt(v1.x*v1.x + v1.y*v1.y)
+                    let len2 = sqrt(v2.x*v2.x + v2.y*v2.y)
+                    
+                    if len1 > 2.0 && len2 > 2.0 {
+                        let cosTheta = (v1.x * v2.x + v1.y * v2.y) / (len1 * len2)
+                        // 約60度以上の鋭角な折れ曲がりのみ角として扱う
+                        if cosTheta < 0.5 {
+                            rawPoints.append(p1)
+                        }
+                    }
+                }
+            }
+        }
+
+        // ④ AR座標への変換と、強力な二重打ち防止（1.5ミリ以内の近い点を統合）
+        var finalPoints: [SIMD2<Float>] = []
+        for pt in rawPoints {
+            let iosX = -boxWidth / 2.0 + (boxWidth * (pt.x / kvgCanvasSize))
+            let iosY = boxHeight / 2.0 - (boxHeight * (pt.y / kvgCanvasSize))
+            let iosPt = SIMD2<Float>(iosX, iosY)
+
+            if !finalPoints.contains(where: { distance($0, iosPt) < 0.0015 }) {
+                finalPoints.append(iosPt)
+            }
+        }
+        
+        return finalPoints
+    }
+    
+    // 指定した点が別の線に接触しているか判定する関数
+    private func touchesAnotherStroke(p: SIMD2<Float>, myIndex: Int, strokes: [[SIMD2<Float>]], tolerance: Float) -> Bool {
+        for j in 0..<strokes.count {
+            if j == myIndex { continue }
+            let otherStroke = strokes[j]
+            for b in 0..<(otherStroke.count - 1) {
+                if pointToSegmentDistance(p: p, v: otherStroke[b], w: otherStroke[b+1]) < tolerance {
+                    return true
+                }
+            }
+        }
+        return false
     }
     
     // ==========================================
-    // 📦 XMLパーサー処理（へんとつくり用）
+    // 📦 XMLパーサー処理
     // ==========================================
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String : String] = [:]) {
         if elementName == "g" {
@@ -160,8 +219,8 @@ class KanjiVGManager: NSObject, XMLParserDelegate {
     }
     
     private func extractCoordinates(from d: String, position: String) {
-        let pts = parsePolyline(from: d)
-        for p in pts {
+        let parsed = parsePolylineAndAnchors(from: d)
+        for p in parsed.polyline {
             if position == "left" { leftBox.update(x: p.x, y: p.y) }
             else if position == "right" { rightBox.update(x: p.x, y: p.y) }
             else if position == "nyo" { nyoBox.update(x: p.x, y: p.y) }
@@ -171,17 +230,16 @@ class KanjiVGManager: NSObject, XMLParserDelegate {
     }
     
     // ==========================================
-    // 📐 交点計算のための幾何学ヘルパー
+    // 📐 線分・交点計算アルゴリズム
     // ==========================================
-    
-    // SVGパスを細かい直線の集まり（ポリライン）に変換する関数
-    private func parsePolyline(from d: String) -> [SIMD2<Float>] {
+    private func parsePolylineAndAnchors(from d: String) -> (polyline: [SIMD2<Float>], anchors: [SIMD2<Float>]) {
         let pattern = "[a-zA-Z]|[-+]?[0-9]*\\.?[0-9]+"
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return ([], []) }
         let matches = regex.matches(in: d, range: NSRange(d.startIndex..., in: d))
         let tokens = matches.map { String(d[Range($0.range, in: d)!]) }
 
         var pts: [SIMD2<Float>] = []
+        var anchors: [SIMD2<Float>] = []
         var startX: Float = 0, startY: Float = 0
         var currentX: Float = 0, currentY: Float = 0
         var command = ""; var args: [Float] = []
@@ -203,16 +261,20 @@ class KanjiVGManager: NSObject, XMLParserDelegate {
                         currentX = isRel ? startX + args[0] : args[0]
                         currentY = isRel ? startY + args[1] : args[1]
                         pts.append(SIMD2<Float>(currentX, currentY))
+                        anchors.append(SIMD2<Float>(currentX, currentY))
                         startX = currentX; startY = currentY
                         if cmd == "m" { command = isRel ? "l" : "L" }
                     } else if cmd == "h" {
                         currentX = isRel ? startX + args[0] : args[0]
-                        pts.append(SIMD2<Float>(currentX, startY)); startX = currentX
+                        pts.append(SIMD2<Float>(currentX, startY))
+                        anchors.append(SIMD2<Float>(currentX, startY))
+                        startX = currentX
                     } else if cmd == "v" {
                         currentY = isRel ? startY + args[0] : args[0]
-                        pts.append(SIMD2<Float>(startX, currentY)); startY = currentY
+                        pts.append(SIMD2<Float>(startX, currentY))
+                        anchors.append(SIMD2<Float>(startX, currentY))
+                        startY = currentY
                     } else if cmd == "c" {
-                        // ベジェ曲線を5分割してサンプリング
                         let c1 = SIMD2<Float>(isRel ? startX + args[0] : args[0], isRel ? startY + args[1] : args[1])
                         let c2 = SIMD2<Float>(isRel ? startX + args[2] : args[2], isRel ? startY + args[3] : args[3])
                         let end = SIMD2<Float>(isRel ? startX + args[4] : args[4], isRel ? startY + args[5] : args[5])
@@ -222,6 +284,7 @@ class KanjiVGManager: NSObject, XMLParserDelegate {
                             let y = (mt*mt*mt)*startY + 3.0*(mt*mt)*t*c1.y + 3.0*mt*(t*t)*c2.y + (t*t*t)*end.y
                             pts.append(SIMD2<Float>(x, y))
                         }
+                        anchors.append(SIMD2<Float>(end.x, end.y))
                         startX = end.x; startY = end.y
                     } else if cmd == "s" || cmd == "q" {
                         let c1 = SIMD2<Float>(isRel ? startX + args[0] : args[0], isRel ? startY + args[1] : args[1])
@@ -232,25 +295,39 @@ class KanjiVGManager: NSObject, XMLParserDelegate {
                             let y = mt*mt*startY + 2.0*mt*t*c1.y + t*t*end.y
                             pts.append(SIMD2<Float>(x, y))
                         }
+                        anchors.append(SIMD2<Float>(end.x, end.y))
                         startX = end.x; startY = end.y
                     }
                     args.removeFirst(req)
                 }
             }
         }
-        return pts
+        return (pts, anchors)
     }
     
-    // 2本の線分が交差しているかを判定する数学関数
     private func segmentsIntersect(p1: SIMD2<Float>, p2: SIMD2<Float>, p3: SIMD2<Float>, p4: SIMD2<Float>) -> SIMD2<Float>? {
         let d = (p2.x - p1.x) * (p4.y - p3.y) - (p2.y - p1.y) * (p4.x - p3.x)
-        if abs(d) < 0.0001 { return nil } // 平行な場合は無視
+        if abs(d) < 0.0001 { return nil }
         let u = ((p3.x - p1.x) * (p4.y - p3.y) - (p3.y - p1.y) * (p4.x - p3.x)) / d
         let v = ((p3.x - p1.x) * (p2.y - p1.y) - (p3.y - p1.y) * (p2.x - p1.x)) / d
+        
         if u >= 0.0 && u <= 1.0 && v >= 0.0 && v <= 1.0 {
             return SIMD2<Float>(p1.x + u * (p2.x - p1.x), p1.y + u * (p2.y - p1.y))
         }
         return nil
+    }
+
+    private func distanceSquared(_ a: SIMD2<Float>, _ b: SIMD2<Float>) -> Float {
+        return (a.x - b.x)*(a.x - b.x) + (a.y - b.y)*(a.y - b.y)
+    }
+
+    private func pointToSegmentDistance(p: SIMD2<Float>, v: SIMD2<Float>, w: SIMD2<Float>) -> Float {
+        let l2 = distanceSquared(v, w)
+        if l2 == 0 { return distance(p, v) }
+        var t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2
+        t = max(0, min(1, t))
+        let projection = SIMD2<Float>(v.x + t * (w.x - v.x), v.y + t * (w.y - v.y))
+        return distance(p, projection)
     }
     
     private func distance(_ a: SIMD2<Float>, _ b: SIMD2<Float>) -> Float {
