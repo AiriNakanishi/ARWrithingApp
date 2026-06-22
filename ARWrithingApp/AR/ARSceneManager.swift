@@ -4,7 +4,8 @@ import ARKit
 
 struct ARSceneManager: UIViewRepresentable {
     @Binding var isLocked: Bool
-    var selectedMode: GuideMode
+    var selectedModes: Set<GuideMode>
+    var baseSize: Float
     
     func makeUIView(context: Context) -> ARView {
         let arView = ARView(frame: .zero)
@@ -20,13 +21,13 @@ struct ARSceneManager: UIViewRepresentable {
         context.coordinator.cursorAnchor = cursorAnchor
         arView.session.delegate = context.coordinator
         
-        context.coordinator.buildARScene(mode: selectedMode)
+        context.coordinator.buildARScene(modes: selectedModes, size: baseSize)
         return arView
     }
     
     func updateUIView(_ uiView: ARView, context: Context) {
         context.coordinator.isLocked = isLocked
-        context.coordinator.buildARScene(mode: selectedMode)
+        context.coordinator.buildARScene(modes: selectedModes, size: baseSize)
     }
     
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -35,18 +36,33 @@ struct ARSceneManager: UIViewRepresentable {
         weak var arView: ARView?
         weak var cursorAnchor: AnchorEntity?
         var isLocked = false
-        var currentRenderedMode: GuideMode? = nil
         
-        func buildARScene(mode: GuideMode) {
-            if currentRenderedMode == mode { return }
+        var currentRenderedModes: Set<GuideMode> = []
+        var currentRenderedSize: Float = 0.0
+        
+        func buildARScene(modes: Set<GuideMode>, size: Float) {
             guard let anchor = cursorAnchor else { return }
             
-            anchor.children.removeAll()
-            currentRenderedMode = mode
+            // 🌟 もしボタン（モード）が切り替わっていたら、中身を作り直す
+            if currentRenderedModes != modes {
+                anchor.children.removeAll()
+                // サイズを指定せず、常に固定サイズ（0.0105）で作る
+                let guideEntity = ARGuideRenderer.createGuideEntity(modes: modes)
+                anchor.addChild(guideEntity)
+                currentRenderedModes = modes
+            }
             
-            // 🌟 実際の3Dモデル作成は ARGuideRenderer に丸投げします！
-            let guideEntity = ARGuideRenderer.createGuideEntity(mode: mode)
-            anchor.addChild(guideEntity)
+            // 🌟 もしスライダー（サイズ）が動いたら、倍率（Scale）だけを変更する
+            if currentRenderedSize != size {
+                // 名前をつけておいた大枠（GuideWrapper）を探す
+                if let wrapper = anchor.findEntity(named: "GuideWrapper") {
+                    // スライダーの数値を、基準サイズ（0.0105）で割って「何倍にするか」を計算
+                    let multiplier = size / ARGuideRenderer.referenceSize
+                    // GPUパワーで一瞬で拡大縮小！
+                    wrapper.scale = SIMD3<Float>(repeating: multiplier)
+                }
+                currentRenderedSize = size
+            }
         }
         
         func session(_ session: ARSession, didUpdate frame: ARFrame) {

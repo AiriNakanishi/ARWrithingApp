@@ -12,6 +12,11 @@ enum GuideType {
 class KanjiVGManager: NSObject, XMLParserDelegate {
     static let shared = KanjiVGManager()
     
+    // 🌟 爆速化のためのキャッシュ（記憶）領域を追加
+    private var guideCache: [Character: GuideType] = [:]
+    private var startsCache: [Character: [SIMD2<Float>]] = [:]
+    private var intersectionsCache: [Character: [SIMD2<Float>]] = [:]
+    
     private var leftBox = BoundingBox()
     private var rightBox = BoundingBox()
     private var nyoBox = BoundingBox()
@@ -26,10 +31,7 @@ class KanjiVGManager: NSObject, XMLParserDelegate {
         var minX: Float = 109, maxX: Float = 0
         var minY: Float = 109, maxY: Float = 0
         var isValid: Bool { return minX <= maxX && minY <= maxY }
-        mutating func update(x: Float, y: Float) {
-            minX = min(minX, x); maxX = max(maxX, x)
-            minY = min(minY, y); maxY = max(maxY, y)
-        }
+        mutating func update(x: Float, y: Float) { minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y) }
         mutating func reset() { minX = 109; maxX = 0; minY = 109; maxY = 0 }
     }
     
@@ -38,6 +40,9 @@ class KanjiVGManager: NSObject, XMLParserDelegate {
     // ==========================================
     
     func getGuide(for char: Character, boxWidth: Float, boxHeight: Float) -> GuideType {
+        // 🌟 もし既に記憶（キャッシュ）にあれば、計算せずに即座にそれを返す
+        if let cached = guideCache[char] { return cached }
+        
         guard let unicodeScalar = char.unicodeScalars.first else { return .none }
         let hexString = String(format: "%05x", unicodeScalar.value)
         guard let url = Bundle.main.url(forResource: hexString, withExtension: "svg", subdirectory: "KanjiVGData")
@@ -59,14 +64,19 @@ class KanjiVGManager: NSObject, XMLParserDelegate {
         func toIosX(_ kvgX: Float) -> Float { return -boxWidth / 2.0 + (boxWidth * (kvgX / kvgCanvasSize)) }
         func toIosY(_ kvgY: Float) -> Float { return boxHeight / 2.0 - (boxHeight * (kvgY / kvgCanvasSize)) }
         
-        if nyoBox.isValid && innerBox.isValid { return .shinnyo(splitX: toIosX(innerBox.minX - 1.0), bottomY: toIosY(innerBox.maxY + 1.0)) }
-        if kamaeBox.isValid && innerBox.isValid { return .kamae(leftX: toIosX(innerBox.minX - 2.0), rightX: toIosX(innerBox.maxX + 2.0), topY: toIosY(innerBox.minY - 2.0), bottomY: toIosY(innerBox.maxY + 2.0)) }
-        if leftBox.isValid && rightBox.isValid { return .henTsukuri(splitX: toIosX((leftBox.maxX + rightBox.minX) / 2.0)) }
+        var result: GuideType = .none
+        if nyoBox.isValid && innerBox.isValid { result = .shinnyo(splitX: toIosX(innerBox.minX - 1.0), bottomY: toIosY(innerBox.maxY + 1.0)) }
+        else if kamaeBox.isValid && innerBox.isValid { result = .kamae(leftX: toIosX(innerBox.minX - 2.0), rightX: toIosX(innerBox.maxX + 2.0), topY: toIosY(innerBox.minY - 2.0), bottomY: toIosY(innerBox.maxY + 2.0)) }
+        else if leftBox.isValid && rightBox.isValid { result = .henTsukuri(splitX: toIosX((leftBox.maxX + rightBox.minX) / 2.0)) }
         
-        return .none
+        // 🌟 苦労して計算した結果を辞書に記憶しておく
+        guideCache[char] = result
+        return result
     }
     
     func getStrokeStarts(for char: Character, boxWidth: Float, boxHeight: Float) -> [SIMD2<Float>] {
+        if let cached = startsCache[char] { return cached } // 🌟 キャッシュチェック
+        
         guard let unicodeScalar = char.unicodeScalars.first else { return [] }
         let hexString = String(format: "%05x", unicodeScalar.value)
         guard let url = Bundle.main.url(forResource: hexString, withExtension: "svg", subdirectory: "KanjiVGData")
@@ -87,10 +97,13 @@ class KanjiVGManager: NSObject, XMLParserDelegate {
                 points.append(SIMD2<Float>(iosX, iosY))
             }
         }
+        startsCache[char] = points // 🌟 記憶
         return points
     }
     
     func getIntersections(for char: Character, boxWidth: Float, boxHeight: Float) -> [SIMD2<Float>] {
+        if let cached = intersectionsCache[char] { return cached } // 🌟 キャッシュチェック
+        
         guard let unicodeScalar = char.unicodeScalars.first else { return [] }
         let hexString = String(format: "%05x", unicodeScalar.value)
         guard let url = Bundle.main.url(forResource: hexString, withExtension: "svg", subdirectory: "KanjiVGData")
@@ -168,6 +181,8 @@ class KanjiVGManager: NSObject, XMLParserDelegate {
                 finalPoints.append(iosPt)
             }
         }
+        
+        intersectionsCache[char] = finalPoints // 🌟 記憶
         return finalPoints
     }
     
@@ -176,9 +191,7 @@ class KanjiVGManager: NSObject, XMLParserDelegate {
             if j == myIndex { continue }
             let otherStroke = strokes[j]
             for b in 0..<(otherStroke.count - 1) {
-                if GeometryMath.pointToSegmentDistance(p: p, v: otherStroke[b], w: otherStroke[b+1]) < tolerance {
-                    return true
-                }
+                if GeometryMath.pointToSegmentDistance(p: p, v: otherStroke[b], w: otherStroke[b+1]) < tolerance { return true }
             }
         }
         return false
