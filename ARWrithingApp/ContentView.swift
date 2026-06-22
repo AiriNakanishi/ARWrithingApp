@@ -23,14 +23,12 @@ struct ContentView: View {
     @State private var currentOffset: CGSize = .zero
     @GestureState private var gestureOffset: CGSize = .zero
     
-//    let baseParallax = CGSize(width: 30, height: 30)
     let baseParallax = CGSize(width: 0, height: 0)
     
     var body: some View {
         ZStack {
             ARViewContainer(isLocked: $isLocked, selectedMode: selectedMode)
-//                .scaleEffect((currentZoom * gestureZoom) * 1.5)
-                .scaleEffect((currentZoom * gestureZoom))
+                .scaleEffect(currentZoom * gestureZoom)
                 .offset(x: baseParallax.width + currentOffset.width + gestureOffset.width, y: baseParallax.height + currentOffset.height + gestureOffset.height)
                 .gesture(DragGesture().updating($gestureOffset) { value, state, _ in state = value.translation }
                     .onEnded { value in currentOffset.width += value.translation.width; currentOffset.height += value.translation.height })
@@ -40,7 +38,6 @@ struct ContentView: View {
                 .animation(.interactiveSpring(response: 0.3, dampingFraction: 0.8), value: gestureOffset)
                 .animation(.interactiveSpring(response: 0.3, dampingFraction: 0.8), value: gestureZoom)
                 .animation(.easeOut(duration: 0.2), value: currentZoom)
-            
             
             VStack {
                 Spacer()
@@ -98,15 +95,22 @@ struct ARViewContainer: UIViewRepresentable {
             
             let textContainer = Entity()
             let targetText = "北海道函館市亀田中野町一一六番地二"
-            let lineThickness: Float = 0.0005, fixedLineSpacing: Float = 0.012
-            let leftXOffset: Float = -0.015, rightXOffset: Float = 0.015, fixedBoxSize: Float = 0.012
+            let lineThickness: Float = 0.0005
+            
+            let fixedLineSpacing: Float = 0.0105
+            // 🌟 修正: 枠のサイズを行間と同じにして、重ならないようにピッタリ合わせました
+            let fixedBoxSize: Float = 0.0105
+            let leftXOffset: Float = -0.015, rightXOffset: Float = 0.015
             var currentY: Float = 0.0
             
-            let uiFont = UIFont(name: "KleeOne-Regular", size: 0.010) ?? UIFont(name: "HiraMinProN-W6", size: 0.010) ?? .systemFont(ofSize: 0.015, weight: .bold)
+            let uiFont = UIFont(name: "HiraMinProN-W3", size: 0.010) ?? UIFont(name: "HiraMinProN-W6", size: 0.010) ?? .systemFont(ofSize: 0.015, weight: .regular)
             let ctFont = CTFontCreateWithName(uiFont.fontName as CFString, 100, nil)
             var textMaterial = UnlitMaterial(color: UIColor.black.withAlphaComponent(0.8)); textMaterial.blending = .transparent(opacity: 1.0)
             var traceMaterial = UnlitMaterial(color: UIColor.black.withAlphaComponent(0.2)); traceMaterial.blending = .transparent(opacity: 1.0)
             let gaikeiShapes: [GuideShape] = [.triangle, .square, .square, .square, .square, .inv_triangle, .trapezoid, .square, .tall_rect, .square, .inv_triangle, .wide_rect, .wide_rect, .triangle, .square, .trapezoid, .wide_rect]
+            
+            // 🌟 全体的な透過度（Alpha）のベース値
+            let baseAlpha: CGFloat = 0.15
             
             for (index, char) in targetText.enumerated() {
                 let charMesh = MeshResource.generateText(String(char), extrusionDepth: 0.0, font: uiFont)
@@ -115,11 +119,12 @@ struct ARViewContainer: UIViewRepresentable {
                 charEntity.position = [leftXOffset - charBounds.center.x, currentY - charBounds.center.y, 0.001]
                 textContainer.addChild(charEntity)
                 
-                let frameEntity = createRectangularFrame(width: fixedBoxSize, height: fixedBoxSize, thickness: lineThickness, color: UIColor.gray.withAlphaComponent(0.3))
+                let frameEntity = createRectangularFrame(width: fixedBoxSize, height: fixedBoxSize, thickness: lineThickness, color: UIColor.gray.withAlphaComponent(baseAlpha))
                 frameEntity.position = [rightXOffset, currentY, 0]
                 textContainer.addChild(frameEntity)
                 
-                let crosshairColor = UIColor.gray.withAlphaComponent(0.4)
+                // 🌟 修正: 十字の点線の透明度を 0.15 に統一
+                let crosshairColor = UIColor.gray.withAlphaComponent(baseAlpha)
                 let vDashedLine = createDashedLineEntity(from: SIMD3<Float>(rightXOffset, currentY + fixedBoxSize / 2, 0), to: SIMD3<Float>(rightXOffset, currentY - fixedBoxSize / 2, 0), thickness: lineThickness * 0.8, color: crosshairColor)
                 let hDashedLine = createDashedLineEntity(from: SIMD3<Float>(rightXOffset - fixedBoxSize / 2, currentY, 0), to: SIMD3<Float>(rightXOffset + fixedBoxSize / 2, currentY, 0), thickness: lineThickness * 0.8, color: crosshairColor)
                 textContainer.addChild(vDashedLine); textContainer.addChild(hDashedLine)
@@ -133,21 +138,22 @@ struct ARViewContainer: UIViewRepresentable {
                     let shape = gaikeiShapes[index % gaikeiShapes.count]
                     var shapeW = fixedBoxSize, shapeH = fixedBoxSize
                     if shape == .wide_rect { shapeH = fixedBoxSize * 0.45 } else if shape == .tall_rect { shapeW = fixedBoxSize * 0.6 }
-                    let gaikeiFrame = createGuideFrame(shape: shape, width: shapeW, height: shapeH, thickness: lineThickness * 1.5, color: UIColor.blue.withAlphaComponent(0.4))
+                    // 🌟 図形の透明度も統一
+                    let gaikeiFrame = createGuideFrame(shape: shape, width: shapeW, height: shapeH, thickness: lineThickness * 1.5, color: UIColor.blue.withAlphaComponent(baseAlpha))
                     gaikeiFrame.position = [rightXOffset, currentY, 0]
                     textContainer.addChild(gaikeiFrame)
                 case .daikei:
                     let metrics = getCharacterMetrics(char: char, font: ctFont)
-                    let daikeiFrame = createDynamicTrapezoid(topWidth: metrics.topWidth, bottomWidth: metrics.bottomWidth, height: metrics.height, thickness: lineThickness * 1.5, color: UIColor.blue.withAlphaComponent(0.4))
+                    let daikeiFrame = createDynamicTrapezoid(topWidth: metrics.topWidth, bottomWidth: metrics.bottomWidth, height: metrics.height, thickness: lineThickness * 1.5, color: UIColor.blue.withAlphaComponent(baseAlpha))
                     daikeiFrame.position = [rightXOffset, currentY, 0]
                     textContainer.addChild(daikeiFrame)
                 case .henTsukuri:
                     let guideType = KanjiVGManager.shared.getGuide(for: char, boxWidth: fixedBoxSize, boxHeight: fixedBoxSize)
                     let drawGuides = { (baseX: Float) in
-                        if case let .henTsukuri(splitX) = guideType { textContainer.addChild(createLineEntity(from: SIMD3<Float>(baseX + splitX, currentY + fixedBoxSize / 2, 0), to: SIMD3<Float>(baseX + splitX, currentY - fixedBoxSize / 2, 0), thickness: lineThickness * 1.5, color: UIColor.blue.withAlphaComponent(0.4))) }
-                        else if case let .center(centerX) = guideType { textContainer.addChild(createLineEntity(from: SIMD3<Float>(baseX + centerX, currentY + fixedBoxSize / 2, 0), to: SIMD3<Float>(baseX + centerX, currentY - fixedBoxSize / 2, 0), thickness: lineThickness * 1.5, color: UIColor.green.withAlphaComponent(0.4))) }
-                        else if case let .shinnyo(splitX, bottomY) = guideType { textContainer.addChild(createLineEntity(from: SIMD3<Float>(baseX + splitX, currentY + fixedBoxSize / 2, 0), to: SIMD3<Float>(baseX + splitX, currentY + bottomY, 0), thickness: lineThickness * 1.5, color: UIColor.orange.withAlphaComponent(0.4))); textContainer.addChild(createLineEntity(from: SIMD3<Float>(baseX + splitX, currentY + bottomY, 0), to: SIMD3<Float>(baseX + fixedBoxSize / 2, currentY + bottomY, 0), thickness: lineThickness * 1.5, color: UIColor.orange.withAlphaComponent(0.4))) }
-                        else if case let .kamae(leftX, rightX, topY, bottomY) = guideType { textContainer.addChild(createLineEntity(from: SIMD3<Float>(baseX + leftX, currentY + topY, 0), to: SIMD3<Float>(baseX + leftX, currentY + bottomY, 0), thickness: lineThickness * 1.5, color: UIColor.purple.withAlphaComponent(0.4))); textContainer.addChild(createLineEntity(from: SIMD3<Float>(baseX + rightX, currentY + topY, 0), to: SIMD3<Float>(baseX + rightX, currentY + bottomY, 0), thickness: lineThickness * 1.5, color: UIColor.purple.withAlphaComponent(0.4))); textContainer.addChild(createLineEntity(from: SIMD3<Float>(baseX + leftX, currentY + bottomY, 0), to: SIMD3<Float>(baseX + rightX, currentY + bottomY, 0), thickness: lineThickness * 1.5, color: UIColor.purple.withAlphaComponent(0.4))) }
+                        if case let .henTsukuri(splitX) = guideType { textContainer.addChild(createLineEntity(from: SIMD3<Float>(baseX + splitX, currentY + fixedBoxSize / 2, 0), to: SIMD3<Float>(baseX + splitX, currentY - fixedBoxSize / 2, 0), thickness: lineThickness * 1.5, color: UIColor.blue.withAlphaComponent(baseAlpha))) }
+                        else if case let .center(centerX) = guideType { textContainer.addChild(createLineEntity(from: SIMD3<Float>(baseX + centerX, currentY + fixedBoxSize / 2, 0), to: SIMD3<Float>(baseX + centerX, currentY - fixedBoxSize / 2, 0), thickness: lineThickness * 1.5, color: UIColor.green.withAlphaComponent(baseAlpha))) }
+                        else if case let .shinnyo(splitX, bottomY) = guideType { textContainer.addChild(createLineEntity(from: SIMD3<Float>(baseX + splitX, currentY + fixedBoxSize / 2, 0), to: SIMD3<Float>(baseX + splitX, currentY + bottomY, 0), thickness: lineThickness * 1.5, color: UIColor.orange.withAlphaComponent(baseAlpha))); textContainer.addChild(createLineEntity(from: SIMD3<Float>(baseX + splitX, currentY + bottomY, 0), to: SIMD3<Float>(baseX + fixedBoxSize / 2, currentY + bottomY, 0), thickness: lineThickness * 1.5, color: UIColor.orange.withAlphaComponent(baseAlpha))) }
+                        else if case let .kamae(leftX, rightX, topY, bottomY) = guideType { textContainer.addChild(createLineEntity(from: SIMD3<Float>(baseX + leftX, currentY + topY, 0), to: SIMD3<Float>(baseX + leftX, currentY + bottomY, 0), thickness: lineThickness * 1.5, color: UIColor.purple.withAlphaComponent(baseAlpha))); textContainer.addChild(createLineEntity(from: SIMD3<Float>(baseX + rightX, currentY + topY, 0), to: SIMD3<Float>(baseX + rightX, currentY + bottomY, 0), thickness: lineThickness * 1.5, color: UIColor.purple.withAlphaComponent(baseAlpha))); textContainer.addChild(createLineEntity(from: SIMD3<Float>(baseX + leftX, currentY + bottomY, 0), to: SIMD3<Float>(baseX + rightX, currentY + bottomY, 0), thickness: lineThickness * 1.5, color: UIColor.purple.withAlphaComponent(baseAlpha))) }
                     }
                     drawGuides(rightXOffset); drawGuides(leftXOffset)
                 case .shiten:
@@ -155,7 +161,8 @@ struct ARViewContainer: UIViewRepresentable {
                     let drawDots = { (baseX: Float) in
                         for point in strokeStarts {
                             let dotMesh = MeshResource.generateSphere(radius: 0.0006)
-                            var dotMat = UnlitMaterial(color: UIColor.red.withAlphaComponent(0.4)); dotMat.blending = .transparent(opacity: 1.0)
+                            // 🌟 修正: 始点のドットの透明度を 0.15 に統一
+                            var dotMat = UnlitMaterial(color: UIColor.red.withAlphaComponent(baseAlpha)); dotMat.blending = .transparent(opacity: 1.0)
                             let dotEntity = ModelEntity(mesh: dotMesh, materials: [dotMat])
                             dotEntity.position = [baseX + point.x, currentY + point.y, 0.0002]
                             textContainer.addChild(dotEntity)
@@ -163,12 +170,12 @@ struct ARViewContainer: UIViewRepresentable {
                     }
                     drawDots(rightXOffset); drawDots(leftXOffset)
                 case .koten:
-                    // 🌟 修正版：「接触」と「角」のみの純粋な交点
                     let intersections = KanjiVGManager.shared.getIntersections(for: char, boxWidth: fixedBoxSize, boxHeight: fixedBoxSize)
                     let drawKoten = { (baseX: Float) in
                         for point in intersections {
                             let dotMesh = MeshResource.generateSphere(radius: 0.0008)
-                            var dotMat = UnlitMaterial(color: UIColor.magenta.withAlphaComponent(0.6))
+                            // 🌟 修正: 交点のドットの透明度を 0.15 に統一
+                            var dotMat = UnlitMaterial(color: UIColor.magenta.withAlphaComponent(baseAlpha))
                             dotMat.blending = .transparent(opacity: 1.0)
                             let dotEntity = ModelEntity(mesh: dotMesh, materials: [dotMat])
                             dotEntity.position = [baseX + point.x, currentY + point.y, 0.0002]
