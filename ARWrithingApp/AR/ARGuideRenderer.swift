@@ -6,9 +6,15 @@ class ARGuideRenderer {
     static let referenceSize: Float = 0.0105
     static let targetText = "北海道函館市亀田中野町一一六番地二"
     
+    // ===================================================
+    // 🌟 楽屋（キャッシュ）の準備
+    // ===================================================
     private static var textMeshCache: [Character: MeshResource] = [:]
     private static var sharedShitenMesh: MeshResource?
     private static var sharedKotenMesh: MeshResource?
+    
+    // 💡 新規追加：AR空間から引っこ抜いたEntityをしまっておく「見えないおもちゃ箱」
+    private static var entityCache: [String: Entity] = [:]
     
     // ===================================================
     // 🌟 1. 起動用：お手本とベースの枠線だけを作る（超軽量）
@@ -71,7 +77,7 @@ class ARGuideRenderer {
     }
     
     // ===================================================
-    // 🌟 2. オンデマンド生成 ＆ ON/OFFの切り替え
+    // 🌟 2. オンデマンド生成 ＆ 着脱式キャッシュの適用
     // ===================================================
     static func updateScene(root: Entity, modes: Set<GuideMode>, size: Float, isLeftHanded: Bool) {
         let startTime = CFAbsoluteTimeGetCurrent()
@@ -88,23 +94,38 @@ class ARGuideRenderer {
         
         let activeNames = Set(modes.map { String(describing: $0) })
         let toggleableNames = ["nazoru", "gaikei", "daikei", "henTsukuri", "shiten", "koten"]
+        let allSides = [otehonSide, renshuSide]
         
         for modeName in toggleableNames {
             let isActive = activeNames.contains(modeName)
             // nazoru は練習側のみ、その他は両側に表示
-            let targetSides = (modeName == "nazoru") ? [renshuSide] : [otehonSide, renshuSide]
+            let targetSides = (modeName == "nazoru") ? [renshuSide] : allSides
             
-            for side in targetSides {
-                if isActive {
-                    // もし「初めて」ボタンが押されたら、ここで生成して追加する
+            for side in allSides {
+                let sideName = side.name // "OtehonSide" または "RenshuSide"
+                let cacheKey = "\(sideName)_\(modeName)" // 例："RenshuSide_daikei"
+                
+                // このSideに今表示すべきか？
+                let shouldBeVisible = isActive && targetSides.contains(side)
+                
+                if shouldBeVisible {
+                    // 💡 表示する時：ステージに居なければ、楽屋から出すか新しく作る
                     if side.findEntity(named: modeName) == nil {
-                        let newGroup = generateModeGroup(modeName: modeName)
-                        side.addChild(newGroup)
+                        if let cachedGroup = entityCache[cacheKey] {
+                            // 楽屋（キャッシュ）に居たのでステージに出す
+                            side.addChild(cachedGroup)
+                        } else {
+                            // 楽屋にも居ないので、新しく作って楽屋リストにも登録しつつステージへ
+                            let newGroup = generateModeGroup(modeName: modeName)
+                            entityCache[cacheKey] = newGroup
+                            side.addChild(newGroup)
+                        }
                     }
-                    side.findEntity(named: modeName)?.isEnabled = true
                 } else {
-                    // 存在していれば非表示にする
-                    side.findEntity(named: modeName)?.isEnabled = false
+                    // 💡 非表示にする時：ステージに居たら、物理的に引っこ抜いて楽屋へ
+                    if let existingGroup = side.findEntity(named: modeName) {
+                        existingGroup.removeFromParent() // isEnabledではなく、ツリーから完全に外す
+                    }
                 }
             }
         }
@@ -164,9 +185,12 @@ class ARGuideRenderer {
                 
             case "daikei":
                 let metrics = getCharacterMetrics(char: char, font: ctFont)
-                let frame = createDynamicTrapezoid(topWidth: metrics.topWidth, bottomWidth: metrics.bottomWidth, height: metrics.height, thickness: lineThickness * 1.5, color: UIColor.blue.withAlphaComponent(baseAlpha))
-                frame.position = [0, currentY, 0]
-                group.addChild(frame)
+                // 🌟 修正ポイント：幅や高さが0以下の時にエンジンがクラッシュするのを防ぐ安全装置
+                if metrics.topWidth > 0 && metrics.bottomWidth > 0 && metrics.height > 0 {
+                    let frame = createDynamicTrapezoid(topWidth: metrics.topWidth, bottomWidth: metrics.bottomWidth, height: metrics.height, thickness: lineThickness * 1.5, color: UIColor.blue.withAlphaComponent(baseAlpha))
+                    frame.position = [0, currentY, 0]
+                    group.addChild(frame)
+                }
                 
             case "henTsukuri":
                 let guideType = KanjiVGManager.shared.getGuide(for: char, boxWidth: fixedBoxSize, boxHeight: fixedBoxSize)
@@ -201,6 +225,8 @@ class ARGuideRenderer {
         }
         return group
     }
+    
+    // (これ以下の reportPerformance、getCPUUsage、charEntityVisualBounds 等の既存の関数は変更なしのため省略せずそのまま維持してください)
     
     private static func reportPerformance(root: Entity, duration: Double) {
         var info = mach_task_basic_info()
