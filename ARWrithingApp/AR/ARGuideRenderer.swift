@@ -11,7 +11,7 @@ class ARGuideRenderer {
     private static var isGenerating: Set<String> = []
     
     // ===================================================
-    // 🌟 1. 起動用（変更なし）
+    // 🌟 1. 起動用（究極軽量化：すべての枠線と点線を1つのEntityに！）
     // ===================================================
     static func createBaseEntity() -> Entity {
         let textContainer = Entity()
@@ -30,32 +30,49 @@ class ARGuideRenderer {
         let fontSize = CGFloat(referenceSize * 0.95)
         let uiFont = UIFont(name: "HiraMinProN-W3", size: fontSize) ?? UIFont(name: "HiraMinProN-W6", size: fontSize) ?? .systemFont(ofSize: fontSize, weight: .regular)
         var textMaterial = UnlitMaterial(color: UIColor.black.withAlphaComponent(0.8)); textMaterial.blending = .transparent(opacity: 1.0)
+        var baseGuideMat = UnlitMaterial(color: UIColor.gray.withAlphaComponent(baseAlpha)); baseGuideMat.blending = .transparent(opacity: 1.0)
         
         var currentY: Float = 0.0
         
+        // 💡 追加：すべての枠線と点線を1つの粘土にまとめるための専用スタッフ
+        var baseBuilder = MeshBuilder()
+        
         for char in targetText {
+            // お手本文字（なぞる用のベース）はこれまで通り1文字1パーツで作成
             let charMesh: MeshResource
             if let cached = textMeshCache[char] { charMesh = cached } else {
                 charMesh = MeshResource.generateText(String(char), extrusionDepth: 0.0, font: uiFont)
                 textMeshCache[char] = charMesh
             }
-            
             let charBounds = charEntityVisualBounds(mesh: charMesh)
             let charEntity = ModelEntity(mesh: charMesh, materials: [textMaterial])
             charEntity.position = [-charBounds.x, currentY - charBounds.y, 0.001]
             otehonSide.addChild(charEntity)
             
-            for side in [otehonSide, renshuSide] {
-                let frameEntity = createRectangularFrame(width: fixedBoxSize, height: fixedBoxSize, thickness: lineThickness, color: UIColor.gray.withAlphaComponent(baseAlpha))
-                frameEntity.position = [0, currentY, 0]
-                side.addChild(frameEntity)
-                
-                let crosshairColor = UIColor.gray.withAlphaComponent(baseAlpha)
-                let vDashedLine = createDashedLineEntity(from: SIMD3<Float>(0, currentY + fixedBoxSize / 2, 0), to: SIMD3<Float>(0, currentY - fixedBoxSize / 2, 0), thickness: lineThickness * 0.8, color: crosshairColor, dashLength: dashLen, gapLength: dashLen)
-                let hDashedLine = createDashedLineEntity(from: SIMD3<Float>(-fixedBoxSize / 2, currentY, 0), to: SIMD3<Float>(fixedBoxSize / 2, currentY, 0), thickness: lineThickness * 0.8, color: crosshairColor, dashLength: dashLen, gapLength: dashLen)
-                side.addChild(vDashedLine); side.addChild(hDashedLine)
-            }
+            // 💡 修正：Entityを直接作るのではなく、設計図（MeshBuilder）に書き込むだけ！
+            
+            // ① 四角い枠線（上・下・左・右）を設計図に追加
+            baseBuilder.addLine(from: [-fixedBoxSize/2, currentY + fixedBoxSize/2], to: [fixedBoxSize/2, currentY + fixedBoxSize/2], thickness: lineThickness) // 上
+            baseBuilder.addLine(from: [-fixedBoxSize/2, currentY - fixedBoxSize/2], to: [fixedBoxSize/2, currentY - fixedBoxSize/2], thickness: lineThickness) // 下
+            baseBuilder.addLine(from: [-fixedBoxSize/2, currentY - fixedBoxSize/2], to: [-fixedBoxSize/2, currentY + fixedBoxSize/2], thickness: lineThickness) // 左
+            baseBuilder.addLine(from: [fixedBoxSize/2, currentY - fixedBoxSize/2], to: [fixedBoxSize/2, currentY + fixedBoxSize/2], thickness: lineThickness) // 右
+            
+            // ② 十字の点線（縦・横）を設計図に追加
+            baseBuilder.addDashedLine(from: [0, currentY + fixedBoxSize/2], to: [0, currentY - fixedBoxSize/2], thickness: lineThickness * 0.8, dashLength: dashLen, gapLength: dashLen)
+            baseBuilder.addDashedLine(from: [-fixedBoxSize/2, currentY], to: [fixedBoxSize/2, currentY], thickness: lineThickness * 0.8, dashLength: dashLen, gapLength: dashLen)
+            
             currentY -= fixedLineSpacing
+        }
+        
+        // 💡 すべての文字のループが終わったら、設計図から一気に「1つの巨大なMesh」を生成！
+        if let baseMergedMesh = baseBuilder.generate() {
+            // お手本側に配置
+            let otehonBase = ModelEntity(mesh: baseMergedMesh, materials: [baseGuideMat])
+            otehonSide.addChild(otehonBase)
+            
+            // 練習側に配置（同じMeshデータ（粘土の型）を使い回すので激軽です）
+            let renshuBase = ModelEntity(mesh: baseMergedMesh, materials: [baseGuideMat])
+            renshuSide.addChild(renshuBase)
         }
         
         let totalBounds = textContainer.visualBounds(relativeTo: nil)
@@ -127,7 +144,7 @@ class ARGuideRenderer {
     }
     
     // ===================================================
-    // 🌟 3. 専用ジェネレーター（💡 ここが「メッシュ結合」の心臓部です！）
+    // 🌟 3. 専用ジェネレーター（変更なし）
     // ===================================================
     private static func generateModeGroup(modeName: String) -> Entity {
         let group = Entity()
@@ -153,8 +170,6 @@ class ARGuideRenderer {
         var currentY: Float = 0.0
         
         for (index, char) in targetText.enumerated() {
-            
-            // 💡 なぞる（nazoru）は文字そのものなので特別扱い（元々1文字1パーツ）
             if modeName == "nazoru" {
                 let charMesh: MeshResource
                 if let cached = textMeshCache[char] { charMesh = cached } else {
@@ -167,9 +182,8 @@ class ARGuideRenderer {
                 group.addChild(traceEntity)
                 
             } else {
-                // 💡 ここからが「1文字分のメッシュ結合」の処理
-                var builder = MeshBuilder() // 設計図を作る専用スタッフ
-                let t = lineThickness * 1.5 // 線の太さ
+                var builder = MeshBuilder()
+                let t = lineThickness * 1.5
                 
                 switch modeName {
                 case "gaikei":
@@ -177,11 +191,10 @@ class ARGuideRenderer {
                     var shapeW = fixedBoxSize, shapeH = fixedBoxSize
                     if shape == .wide_rect { shapeH = fixedBoxSize * 0.45 } else if shape == .tall_rect { shapeW = fixedBoxSize * 0.6 }
                     
-                    // 設計図に4本の線を書き込む
-                    builder.addLine(from: [-shapeW/2, shapeH/2], to: [shapeW/2, shapeH/2], thickness: t) // 上
-                    builder.addLine(from: [-shapeW/2, -shapeH/2], to: [shapeW/2, -shapeH/2], thickness: t) // 下
-                    builder.addLine(from: [-shapeW/2, -shapeH/2], to: [-shapeW/2, shapeH/2], thickness: t) // 左
-                    builder.addLine(from: [shapeW/2, -shapeH/2], to: [shapeW/2, shapeH/2], thickness: t) // 右
+                    builder.addLine(from: [-shapeW/2, shapeH/2], to: [shapeW/2, shapeH/2], thickness: t)
+                    builder.addLine(from: [-shapeW/2, -shapeH/2], to: [shapeW/2, -shapeH/2], thickness: t)
+                    builder.addLine(from: [-shapeW/2, -shapeH/2], to: [-shapeW/2, shapeH/2], thickness: t)
+                    builder.addLine(from: [shapeW/2, -shapeH/2], to: [shapeW/2, shapeH/2], thickness: t)
                     
                 case "daikei":
                     let metrics = getCharacterMetrics(char: char, font: ctFont)
@@ -189,10 +202,10 @@ class ARGuideRenderer {
                         let tw = metrics.topWidth
                         let bw = metrics.bottomWidth
                         let h = metrics.height
-                        builder.addLine(from: [-tw/2, h/2], to: [tw/2, h/2], thickness: t) // 上
-                        builder.addLine(from: [-bw/2, -h/2], to: [bw/2, -h/2], thickness: t) // 下
-                        builder.addLine(from: [-bw/2, -h/2], to: [-tw/2, h/2], thickness: t) // 左
-                        builder.addLine(from: [bw/2, -h/2], to: [tw/2, h/2], thickness: t) // 右
+                        builder.addLine(from: [-tw/2, h/2], to: [tw/2, h/2], thickness: t)
+                        builder.addLine(from: [-bw/2, -h/2], to: [bw/2, -h/2], thickness: t)
+                        builder.addLine(from: [-bw/2, -h/2], to: [-tw/2, h/2], thickness: t)
+                        builder.addLine(from: [bw/2, -h/2], to: [tw/2, h/2], thickness: t)
                     }
                     
                 case "henTsukuri":
@@ -225,11 +238,10 @@ class ARGuideRenderer {
                 default: break
                 }
                 
-                // 💡 設計図が書き終わったら、一気に「1つのMesh」として実体化させる！
                 if let mergedMesh = builder.generate() {
                     let charMat = (modeName == "shiten") ? shitenMat : (modeName == "koten") ? kotenMat : guideMat
                     let charEntity = ModelEntity(mesh: mergedMesh, materials: [charMat])
-                    charEntity.position = [0, currentY, 0.0002] // 1文字分のパーツとして配置
+                    charEntity.position = [0, currentY, 0.0002]
                     group.addChild(charEntity)
                 }
             }
@@ -299,27 +311,24 @@ class ARGuideRenderer {
     }
     
     // ===================================================
-    // 🌟 4. 新規追加：設計図を作るための専用スタッフ（MeshBuilder）
+    // 🌟 4. 新規追加：設計図スタッフ（MeshBuilder）
     // ===================================================
     private struct MeshBuilder {
         var positions: [SIMD3<Float>] = []
         var indices: [UInt32] = []
         
-        // 四角形（ポリゴン）の情報を追加する
         mutating func addQuad(p0: SIMD3<Float>, p1: SIMD3<Float>, p2: SIMD3<Float>, p3: SIMD3<Float>) {
             let startIdx = UInt32(positions.count)
             positions.append(contentsOf: [p0, p1, p2, p3])
-            // 2つの三角形を組み合わせて四角形を作る
+            // 💡 表面として認識されるように反時計回りで結ぶ
             indices.append(contentsOf: [startIdx, startIdx+2, startIdx+1, startIdx, startIdx+3, startIdx+2])
         }
         
-        // 線の情報を四角形として追加する
         mutating func addLine(from: SIMD2<Float>, to: SIMD2<Float>, thickness: Float) {
             let dir = to - from
             let length = simd_length(dir)
             guard length > 0 else { return }
             let normDir = dir / length
-            // 線に対して垂直なベクトルを計算
             let perp = SIMD2<Float>(-normDir.y, normDir.x) * (thickness / 2.0)
             
             let p0 = SIMD3<Float>(from.x - perp.x, from.y - perp.y, 0)
@@ -330,7 +339,26 @@ class ARGuideRenderer {
             addQuad(p0: p0, p1: p1, p2: p2, p3: p3)
         }
         
-        // 点（ドット）の情報を正方形として追加する
+        // 💡 新規追加：点線を計算して追加する機能
+        mutating func addDashedLine(from: SIMD2<Float>, to: SIMD2<Float>, thickness: Float, dashLength: Float, gapLength: Float) {
+            let dir = to - from
+            let totalLength = simd_length(dir)
+            guard totalLength > 0 else { return }
+            let normDir = dir / totalLength
+            
+            var currentLen: Float = 0.0
+            while currentLen < totalLength {
+                let start = from + normDir * currentLen
+                // 最後の破線がはみ出さないように長さを調整
+                let thisDashLen = min(dashLength, totalLength - currentLen)
+                let end = start + normDir * thisDashLen
+                
+                addLine(from: start, to: end, thickness: thickness)
+                
+                currentLen += dashLength + gapLength
+            }
+        }
+        
         mutating func addDot(center: SIMD2<Float>, radius: Float) {
             let p0 = SIMD3<Float>(center.x + radius, center.y - radius, 0)
             let p1 = SIMD3<Float>(center.x - radius, center.y - radius, 0)
@@ -339,7 +367,6 @@ class ARGuideRenderer {
             addQuad(p0: p0, p1: p1, p2: p2, p3: p3)
         }
         
-        // 設計図から本物のMeshResourceを一撃で生成する
         func generate() -> MeshResource? {
             guard !positions.isEmpty else { return nil }
             var desc = MeshDescriptor(name: "mergedMesh")
