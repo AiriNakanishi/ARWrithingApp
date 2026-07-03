@@ -10,10 +10,17 @@ class ARGuideRenderer {
     private static var entityCache: [String: Entity] = [:]
     private static var isGenerating: Set<String> = []
     
+    // 💡 新しく追加：文字が変わった時に楽屋（キャッシュ）を一斉に大掃除する
+        static func clearCache() {
+            textMeshCache.removeAll()
+            entityCache.removeAll()
+            isGenerating.removeAll()
+        }
+    
     // ===================================================
     // 🌟 1. 起動用（究極軽量化：すべての枠線と点線を1つのEntityに！）
     // ===================================================
-    static func createBaseEntity() -> Entity {
+    static func createBaseEntity(text: String) -> Entity {
         let textContainer = Entity()
         
         let otehonSide = Entity(); otehonSide.name = "OtehonSide"
@@ -37,7 +44,7 @@ class ARGuideRenderer {
         // 💡 追加：すべての枠線と点線を1つの粘土にまとめるための専用スタッフ
         var baseBuilder = MeshBuilder()
         
-        for char in targetText {
+        for char in text {
             // お手本文字（なぞる用のベース）はこれまで通り1文字1パーツで作成
             let charMesh: MeshResource
             if let cached = textMeshCache[char] { charMesh = cached } else {
@@ -87,7 +94,7 @@ class ARGuideRenderer {
     // ===================================================
     // 🌟 2. オンデマンド生成（変更なし）
     // ===================================================
-    static func updateScene(root: Entity, modes: Set<GuideMode>, size: Float, isLeftHanded: Bool) {
+    static func updateScene(root: Entity, modes: Set<GuideMode>, size: Float, isLeftHanded: Bool, text: String) {
         let startTime = CFAbsoluteTimeGetCurrent()
         
         guard let wrapper = root.findEntity(named: "GuideWrapper"),
@@ -121,7 +128,7 @@ class ARGuideRenderer {
                             if !isGenerating.contains(cacheKey) {
                                 isGenerating.insert(cacheKey)
                                 DispatchQueue.main.async {
-                                    let newGroup = generateModeGroup(modeName: modeName)
+                                    let newGroup = generateModeGroup(modeName: modeName, text: text)
                                     self.entityCache[cacheKey] = newGroup
                                     self.isGenerating.remove(cacheKey)
                                     if side.findEntity(named: modeName) == nil {
@@ -146,7 +153,7 @@ class ARGuideRenderer {
     // ===================================================
     // 🌟 3. 専用ジェネレーター（変更なし）
     // ===================================================
-    private static func generateModeGroup(modeName: String) -> Entity {
+    private static func generateModeGroup(modeName: String, text: String) -> Entity {
         let group = Entity()
         group.name = modeName
         
@@ -169,7 +176,7 @@ class ARGuideRenderer {
         
         var currentY: Float = 0.0
         
-        for (index, char) in targetText.enumerated() {
+        for (index, char) in text.enumerated() {
             if modeName == "nazoru" {
                 let charMesh: MeshResource
                 if let cached = textMeshCache[char] { charMesh = cached } else {
