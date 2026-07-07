@@ -196,12 +196,12 @@ struct ContentView: View {
                 // 中央の入力カード
                 VStack(spacing: 24) {
                     VStack(spacing: 8) {
-                        Text("練習テキストの設定")
+                        Text("テキスト設定")
                             .font(.title3)
                             .fontWeight(.bold)
                             .foregroundColor(.primary)
                         
-                        Text("AR空間に表示する文字を入力してください")
+                        Text("表示する文字を入力してください")
                             .font(.footnote)
                             .foregroundColor(.secondary)
                     }
@@ -226,7 +226,7 @@ struct ContentView: View {
                             isEditingText = false
                         }
                     }) {
-                        Text("スタート")
+                        Text("決定")
                             .font(.headline)
                             .fontWeight(.bold)
                             .foregroundColor(.white)
