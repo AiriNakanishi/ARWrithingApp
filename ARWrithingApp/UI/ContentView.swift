@@ -3,8 +3,8 @@ import SwiftUI
 enum GuideMode: String, CaseIterable, Identifiable {
     case nazoru = "なぞる"
     case gaikei = "外形"
-    case daikei = "台形"
-    case henTsukuri = "へんとつくり"
+    case daikei = "外接台形"
+    case henTsukuri = "部首の境目"
     case shiten = "始点"
     case koten = "交点"
     
@@ -26,11 +26,11 @@ struct ContentView: View {
     @GestureState private var gestureOffset: CGSize = .zero
     
     // 大学の住所をデフォルト設定
-    @State private var targetText = "北海道函館市亀田中野町一一六番地二"
+    @State private var targetText = "上寺市緑町丘道一丁目"
     // 💡 初期状態：アプリ起動時にすぐ文字設定ポップアップを出すため true にする
     @State private var isEditingText = true
     // ポップアップを開いた時に、現在の文字が最初から入力欄に入っているようにする
-    @State private var textInputBuffer = "北海道函館市亀田中野町一一六番地二"
+    @State private var textInputBuffer = "上寺市緑町丘道一丁目"
     
     let baseParallax = CGSize(width: 0, height: 0)
     

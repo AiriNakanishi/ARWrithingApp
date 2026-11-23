@@ -17,6 +17,27 @@ class ARGuideRenderer {
     
     // 💡 あいりさん考案の美文字アルゴリズム（ノイズ除去・極端アスペクト比対応版）
         static func getGaikeiShape(char: Character, uiFont: UIFont) -> GuideShape {
+            
+            let charString = String(char)
+                    switch charString {
+                    case "上":
+                        return .triangle
+                    case "寺":
+                        return .rhombus
+                    case "丘":
+                        return .trapezoid
+                    case "市", "丁":
+                        return .inv_triangle
+                    case "緑", "町", "道":
+                        return .square
+                    case "一":
+                        return .wide_rect
+                    case "目":
+                        return .tall_rect
+                    default:
+                        break // 💡 指定されていない文字はここを通り抜けて、今までの自動判定へ進む
+                    }
+            
             let metrics = ARShapeBuilder.getShapeClassificationMetrics(char: char, uiFont: uiFont)
             
             // ゼロ除算防止
