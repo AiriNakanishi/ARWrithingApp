@@ -4,16 +4,99 @@ import CoreText
 
 class ARGuideRenderer {
     static let referenceSize: Float = 0.0105
-    static let targetText = "北海道函館市亀田中野町一一六番地二"
     
     private static var textMeshCache: [Character: MeshResource] = [:]
     private static var entityCache: [String: Entity] = [:]
     private static var isGenerating: Set<String> = []
     
+    static func clearCache() {
+        textMeshCache.removeAll()
+        entityCache.removeAll()
+        isGenerating.removeAll()
+    }
+    
+    // 💡 あいりさん考案の美文字アルゴリズム（ノイズ除去・極端アスペクト比対応版）
+        static func getGaikeiShape(char: Character, uiFont: UIFont) -> GuideShape {
+            
+//            let charString = String(char)
+//                    switch charString {
+//                    case "上":
+//                        return .triangle
+//                    case "寺":
+//                        return .rhombus
+//                    case "丘":
+//                        return .trapezoid
+//                    case "市", "丁":
+//                        return .inv_triangle
+//                    case "緑", "町", "道":
+//                        return .square
+//                    case "一":
+//                        return .wide_rect
+//                    case "目":
+//                        return .tall_rect
+//                    default:
+//                        break // 💡 指定されていない文字はここを通り抜けて、今までの自動判定へ進む
+//                    }
+            
+            let metrics = ARShapeBuilder.getShapeClassificationMetrics(char: char, uiFont: uiFont)
+            
+            // ゼロ除算防止
+            let w = metrics.width > 0 ? metrics.width : 1.0
+            let h = metrics.height > 0 ? metrics.height : 1.0
+            let topW = metrics.topWidth
+            let botW = metrics.bottomWidth
+            let cornerRatio = metrics.cornerRatio
+            
+            let aspectRatio = w / h
+            
+            // 1. 【ひし形判定】四隅のインク密度が極端に低い
+            if cornerRatio < 0.12 {
+                return .rhombus
+            }
+            
+            // 2. 【極端な長方形判定】アスペクト比で即決（「一」などが三角形に吸い込まれるのを防ぐ）
+            if aspectRatio > 2.0 {
+                return .wide_rect  // 横幅が高さの2倍以上なら文句なしで横長
+            } else if aspectRatio < 0.5 {
+                return .tall_rect  // 高さが横幅の2倍以上なら文句なしで縦長
+            }
+            
+            // 3. 【ノイズ・細すぎ除外フィルター】
+            // 条件A: 上の幅と下の幅に、文字全体の10%以上の明確な差があるか？（微小な誤差のノイズキャンセリング）
+            let hasSignificantDifference = abs(topW - botW) > (w * 0.1)
+            // 条件B: 上の幅か下の幅のどちらかが、文字全体の20%以上の太さを持っているか？（「中」の縦棒など細すぎ判定の除外）
+            let isNotJustLines = topW > (w * 0.2) || botW > (w * 0.2)
+            
+            // 誤差がなく、かつ単なる線ではない場合のみ、すぼまり具合（三角・台形）を判定する
+            if hasSignificantDifference && isNotJustLines {
+                
+                // 4. 【三角・台形判定】
+                if botW > topW * 1.5 {
+                    if topW < w * 0.45 {
+                        return .triangle     // 下が広く、上が尖っていれば三角
+                    } else {
+                        return .trapezoid    // 下が広く、上もそこそこ広ければ台形
+                    }
+                } else if topW > botW * 1.5 {
+                    return .inv_triangle     // 上が広ければ逆三角
+                }
+            }
+            
+            // 5. 【緩い長方形判定】極端ではないが、少し縦長・横長なもの
+            if aspectRatio > 1.1 {
+                return .wide_rect
+            } else if aspectRatio < 0.9 {
+                return .tall_rect
+            }
+            
+            // 6. 【正方形】これまでの条件をすべてすり抜けた、バランスの良い四角い文字
+            return .square
+        }
+    
     // ===================================================
-    // 🌟 1. 起動用（究極軽量化：すべての枠線と点線を1つのEntityに！）
+    // 🌟 1. 起動用
     // ===================================================
-    static func createBaseEntity() -> Entity {
+    static func createBaseEntity(text: String) -> Entity {
         let textContainer = Entity()
         
         let otehonSide = Entity(); otehonSide.name = "OtehonSide"
@@ -28,17 +111,15 @@ class ARGuideRenderer {
         let baseAlpha: CGFloat = 0.15
         
         let fontSize = CGFloat(referenceSize * 0.95)
-        let uiFont = UIFont(name: "HiraMinProN-W3", size: fontSize) ?? UIFont(name: "HiraMinProN-W6", size: fontSize) ?? .systemFont(ofSize: fontSize, weight: .regular)
+//        let uiFont = UIFont(name: "HiraMinProN-W3", size: fontSize) ?? UIFont(name: "HiraMinProN-W6", size: fontSize) ?? .systemFont(ofSize: fontSize, weight: .regular)
+        let uiFont = UIFont(name: "KleeOne-Regular", size: fontSize) ?? .systemFont(ofSize: fontSize, weight: .regular)
         var textMaterial = UnlitMaterial(color: UIColor.black.withAlphaComponent(0.8)); textMaterial.blending = .transparent(opacity: 1.0)
         var baseGuideMat = UnlitMaterial(color: UIColor.gray.withAlphaComponent(baseAlpha)); baseGuideMat.blending = .transparent(opacity: 1.0)
         
         var currentY: Float = 0.0
-        
-        // 💡 追加：すべての枠線と点線を1つの粘土にまとめるための専用スタッフ
         var baseBuilder = MeshBuilder()
         
-        for char in targetText {
-            // お手本文字（なぞる用のベース）はこれまで通り1文字1パーツで作成
+        for char in text {
             let charMesh: MeshResource
             if let cached = textMeshCache[char] { charMesh = cached } else {
                 charMesh = MeshResource.generateText(String(char), extrusionDepth: 0.0, font: uiFont)
@@ -49,28 +130,21 @@ class ARGuideRenderer {
             charEntity.position = [-charBounds.x, currentY - charBounds.y, 0.001]
             otehonSide.addChild(charEntity)
             
-            // 💡 修正：Entityを直接作るのではなく、設計図（MeshBuilder）に書き込むだけ！
+            baseBuilder.addLine(from: [-fixedBoxSize/2, currentY + fixedBoxSize/2], to: [fixedBoxSize/2, currentY + fixedBoxSize/2], thickness: lineThickness)
+            baseBuilder.addLine(from: [-fixedBoxSize/2, currentY - fixedBoxSize/2], to: [fixedBoxSize/2, currentY - fixedBoxSize/2], thickness: lineThickness)
+            baseBuilder.addLine(from: [-fixedBoxSize/2, currentY - fixedBoxSize/2], to: [-fixedBoxSize/2, currentY + fixedBoxSize/2], thickness: lineThickness)
+            baseBuilder.addLine(from: [fixedBoxSize/2, currentY - fixedBoxSize/2], to: [fixedBoxSize/2, currentY + fixedBoxSize/2], thickness: lineThickness)
             
-            // ① 四角い枠線（上・下・左・右）を設計図に追加
-            baseBuilder.addLine(from: [-fixedBoxSize/2, currentY + fixedBoxSize/2], to: [fixedBoxSize/2, currentY + fixedBoxSize/2], thickness: lineThickness) // 上
-            baseBuilder.addLine(from: [-fixedBoxSize/2, currentY - fixedBoxSize/2], to: [fixedBoxSize/2, currentY - fixedBoxSize/2], thickness: lineThickness) // 下
-            baseBuilder.addLine(from: [-fixedBoxSize/2, currentY - fixedBoxSize/2], to: [-fixedBoxSize/2, currentY + fixedBoxSize/2], thickness: lineThickness) // 左
-            baseBuilder.addLine(from: [fixedBoxSize/2, currentY - fixedBoxSize/2], to: [fixedBoxSize/2, currentY + fixedBoxSize/2], thickness: lineThickness) // 右
-            
-            // ② 十字の点線（縦・横）を設計図に追加
             baseBuilder.addDashedLine(from: [0, currentY + fixedBoxSize/2], to: [0, currentY - fixedBoxSize/2], thickness: lineThickness * 0.8, dashLength: dashLen, gapLength: dashLen)
             baseBuilder.addDashedLine(from: [-fixedBoxSize/2, currentY], to: [fixedBoxSize/2, currentY], thickness: lineThickness * 0.8, dashLength: dashLen, gapLength: dashLen)
             
             currentY -= fixedLineSpacing
         }
         
-        // 💡 すべての文字のループが終わったら、設計図から一気に「1つの巨大なMesh」を生成！
         if let baseMergedMesh = baseBuilder.generate() {
-            // お手本側に配置
             let otehonBase = ModelEntity(mesh: baseMergedMesh, materials: [baseGuideMat])
             otehonSide.addChild(otehonBase)
             
-            // 練習側に配置（同じMeshデータ（粘土の型）を使い回すので激軽です）
             let renshuBase = ModelEntity(mesh: baseMergedMesh, materials: [baseGuideMat])
             renshuSide.addChild(renshuBase)
         }
@@ -85,9 +159,9 @@ class ARGuideRenderer {
     }
     
     // ===================================================
-    // 🌟 2. オンデマンド生成（変更なし）
+    // 🌟 2. オンデマンド生成
     // ===================================================
-    static func updateScene(root: Entity, modes: Set<GuideMode>, size: Float, isLeftHanded: Bool) {
+    static func updateScene(root: Entity, modes: Set<GuideMode>, size: Float, isLeftHanded: Bool, text: String) {
         let startTime = CFAbsoluteTimeGetCurrent()
         
         guard let wrapper = root.findEntity(named: "GuideWrapper"),
@@ -101,7 +175,7 @@ class ARGuideRenderer {
         renshuSide.position.x = isLeftHanded ? -baseOffset : baseOffset
         
         let activeNames = Set(modes.map { String(describing: $0) })
-        let toggleableNames = ["nazoru", "gaikei", "daikei", "henTsukuri", "shiten", "koten"]
+        let toggleableNames = ["omakase", "nazoru", "gaikei", "daikei", "henTsukuri", "shiten", "koten"]
         let allSides = [otehonSide, renshuSide]
         
         for modeName in toggleableNames {
@@ -121,7 +195,7 @@ class ARGuideRenderer {
                             if !isGenerating.contains(cacheKey) {
                                 isGenerating.insert(cacheKey)
                                 DispatchQueue.main.async {
-                                    let newGroup = generateModeGroup(modeName: modeName)
+                                    let newGroup = generateModeGroup(modeName: modeName, text: text)
                                     self.entityCache[cacheKey] = newGroup
                                     self.isGenerating.remove(cacheKey)
                                     if side.findEntity(named: modeName) == nil {
@@ -140,13 +214,14 @@ class ARGuideRenderer {
         }
         
         let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-        reportPerformance(root: root, duration: duration)
+        // 💡 分離した ARPerformanceMonitor から呼び出すように修正
+        ARPerformanceMonitor.reportPerformance(root: root, duration: duration)
     }
     
     // ===================================================
-    // 🌟 3. 専用ジェネレーター（変更なし）
+    // 🌟 3. 専用ジェネレーター
     // ===================================================
-    private static func generateModeGroup(modeName: String) -> Entity {
+    private static func generateModeGroup(modeName: String, text: String) -> Entity {
         let group = Entity()
         group.name = modeName
         
@@ -157,19 +232,19 @@ class ARGuideRenderer {
         let baseAlpha: CGFloat = 0.15
         
         let fontSize = CGFloat(referenceSize * 0.95)
-        let uiFont = UIFont(name: "HiraMinProN-W3", size: fontSize) ?? .systemFont(ofSize: fontSize)
+//        let uiFont = UIFont(name: "HiraMinProN-W3", size: fontSize) ?? .systemFont(ofSize: fontSize)
+        let uiFont = UIFont(name: "KleeOne-Regular", size: fontSize) ?? .systemFont(ofSize: fontSize)
         let ctFont = CTFontCreateWithName(uiFont.fontName as CFString, 100, nil)
+    
         
         var traceMaterial = UnlitMaterial(color: UIColor.black.withAlphaComponent(0.2)); traceMaterial.blending = .transparent(opacity: 1.0)
         var shitenMat = UnlitMaterial(color: UIColor.red.withAlphaComponent(baseAlpha)); shitenMat.blending = .transparent(opacity: 1.0)
         var kotenMat = UnlitMaterial(color: UIColor.magenta.withAlphaComponent(baseAlpha)); kotenMat.blending = .transparent(opacity: 1.0)
         var guideMat = UnlitMaterial(color: UIColor.blue.withAlphaComponent(baseAlpha)); guideMat.blending = .transparent(opacity: 1.0)
         
-        let gaikeiShapes: [GuideShape] = [.triangle, .square, .square, .square, .square, .inv_triangle, .trapezoid, .square, .tall_rect, .square, .inv_triangle, .wide_rect, .wide_rect, .triangle, .square, .trapezoid, .wide_rect]
-        
         var currentY: Float = 0.0
         
-        for (index, char) in targetText.enumerated() {
+        for char in text {
             if modeName == "nazoru" {
                 let charMesh: MeshResource
                 if let cached = textMeshCache[char] { charMesh = cached } else {
@@ -181,31 +256,212 @@ class ARGuideRenderer {
                 traceEntity.position = [-bounds.x, currentY - bounds.y, 0.001]
                 group.addChild(traceEntity)
                 
-            } else {
-                var builder = MeshBuilder()
-                let t = lineThickness * 1.5
+            } else if modeName == "omakase" {
+                // ===================================================
+                // 🌟 おまかせモード：グループA（外枠）＋ グループB（内部）
+                // ===================================================
+                var blueBuilder = MeshBuilder() // 青：外枠（実線）＋ 部首の境目（破線）
+                var redBuilder = MeshBuilder()  // 赤：始点（点）
                 
-                switch modeName {
-                case "gaikei":
-                    let shape = gaikeiShapes[index % gaikeiShapes.count]
-                    var shapeW = fixedBoxSize, shapeH = fixedBoxSize
-                    if shape == .wide_rect { shapeH = fixedBoxSize * 0.45 } else if shape == .tall_rect { shapeW = fixedBoxSize * 0.6 }
-                    
-                    builder.addLine(from: [-shapeW/2, shapeH/2], to: [shapeW/2, shapeH/2], thickness: t)
-                    builder.addLine(from: [-shapeW/2, -shapeH/2], to: [shapeW/2, -shapeH/2], thickness: t)
-                    builder.addLine(from: [-shapeW/2, -shapeH/2], to: [-shapeW/2, shapeH/2], thickness: t)
-                    builder.addLine(from: [shapeW/2, -shapeH/2], to: [shapeW/2, shapeH/2], thickness: t)
-                    
-                case "daikei":
-                    let metrics = getCharacterMetrics(char: char, font: ctFont)
+                let t = lineThickness * 1.5
+                let dashLen = referenceSize * 0.076
+                let w = fixedBoxSize
+                let h = fixedBoxSize
+                
+                let features = KanjiVGManager.shared.getAutoGuideFeatures(for: char, boxWidth: fixedBoxSize, boxHeight: fixedBoxSize)
+                
+                // 外接台形を描く共通処理
+                func addTrapezoid() {
+                    let metrics = ARShapeBuilder.getTrapezoidMetrics(char: char, font: ctFont)
                     if metrics.topWidth > 0 && metrics.bottomWidth > 0 && metrics.height > 0 {
                         let tw = metrics.topWidth
                         let bw = metrics.bottomWidth
-                        let h = metrics.height
-                        builder.addLine(from: [-tw/2, h/2], to: [tw/2, h/2], thickness: t)
-                        builder.addLine(from: [-bw/2, -h/2], to: [bw/2, -h/2], thickness: t)
-                        builder.addLine(from: [-bw/2, -h/2], to: [-tw/2, h/2], thickness: t)
-                        builder.addLine(from: [bw/2, -h/2], to: [tw/2, h/2], thickness: t)
+                        let ch = metrics.height
+                        blueBuilder.addLine(from: [-tw/2, ch/2], to: [tw/2, ch/2], thickness: t)
+                        blueBuilder.addLine(from: [-bw/2, -ch/2], to: [bw/2, -ch/2], thickness: t)
+                        blueBuilder.addLine(from: [-bw/2, -ch/2], to: [-tw/2, ch/2], thickness: t)
+                        blueBuilder.addLine(from: [bw/2, -ch/2], to: [tw/2, ch/2], thickness: t)
+                    }
+                }
+                
+                var logGroupA = "なし"
+                var logGroupB = "なし"
+                
+                if !features.hasSVG {
+                    // 💡 フォールバック（ひらがな・記号などKanjiVGにない文字）：外接台形のみ
+                    addTrapezoid()
+                    logGroupA = "外接台形(フォールバック)"
+                } else {
+                    // --- グループA（外枠・骨格ガイド）---
+                    if features.strokeCount == 1 {
+                        // 1画は「なし」
+                        logGroupA = "なし"
+                    } else if getGaikeiShape(char: char, uiFont: uiFont) == .rhombus {
+                        // 2画以上かつひし形 → 外形（ひし形・青の実線）
+                        let metrics = ARShapeBuilder.getShapeClassificationMetrics(char: char, uiFont: uiFont)
+                        let aspect = (metrics.height > 0 && metrics.width > 0) ? (metrics.width / metrics.height) : 1.0
+                        let rw = aspect > 1.0 ? w : h * aspect
+                        let rh = aspect > 1.0 ? w / aspect : h
+                        blueBuilder.addLine(from: [0.0, rh/2], to: [rw/2, 0.0], thickness: t)
+                        blueBuilder.addLine(from: [rw/2, 0.0], to: [0.0, -rh/2], thickness: t)
+                        blueBuilder.addLine(from: [0.0, -rh/2], to: [-rw/2, 0.0], thickness: t)
+                        blueBuilder.addLine(from: [-rw/2, 0.0], to: [0.0, rh/2], thickness: t)
+                        logGroupA = "外形(ひし形)"
+                    } else {
+                        // それ以外 → 外接台形（青の実線）
+                        addTrapezoid()
+                        logGroupA = "外接台形"
+                    }
+                    
+                    // --- グループB（内部・運筆ガイド）---
+                    if let splitX = features.radicalSplitX {
+                        // 左右構造かつ部首が left/right → 部首の境目（青の破線）
+                        blueBuilder.addDashedLine(from: [splitX, fixedBoxSize / 2], to: [splitX, -fixedBoxSize / 2], thickness: t, dashLength: dashLen, gapLength: dashLen)
+                        logGroupB = "部首の境目"
+                    } else if features.totalLength >= 365.0 {
+                        // 線の総延長が 365.0 以上 → 「なし」
+                        logGroupB = "なし"
+                    } else {
+                        // 線の総延長が 365.0 未満 → 始点（赤の点）
+                        let strokeStarts = KanjiVGManager.shared.getStrokeStarts(for: char, boxWidth: fixedBoxSize, boxHeight: fixedBoxSize)
+                        for point in strokeStarts {
+                            redBuilder.addDot(center: [point.x, point.y], radius: dotRadius * 0.75)
+                        }
+                        logGroupB = "始点"
+                    }
+                }
+                
+                // 🔍 テストケース確認用ログ（Xcodeのコンソールに判定結果と総延長を表示）
+                print("[おまかせ] 「\(char)」 画数:\(features.strokeCount) 総延長:\(String(format: "%.1f", features.totalLength)) -> A:\(logGroupA) / B:\(logGroupB)")
+                
+                // 青メッシュ（外枠＋部首の境目）を配置
+                if let blueMesh = blueBuilder.generate() {
+                    let blueEntity = ModelEntity(mesh: blueMesh, materials: [guideMat])
+                    blueEntity.position = [0, currentY, 0.0002]
+                    group.addChild(blueEntity)
+                }
+                // 赤メッシュ（始点）をわずかに手前に配置して重なりチラつきを防止
+                if let redMesh = redBuilder.generate() {
+                    let redEntity = ModelEntity(mesh: redMesh, materials: [shitenMat])
+                    redEntity.position = [0, currentY, 0.0003]
+                    group.addChild(redEntity)
+                }
+                
+            } else {
+                var builder = MeshBuilder()
+                let t = lineThickness * 1.5
+                let w = fixedBoxSize
+                let h = fixedBoxSize
+                
+                switch modeName {
+                case "gaikei":
+                                    let shape = getGaikeiShape(char: char, uiFont: uiFont)
+                                    
+                                    let metrics = ARShapeBuilder.getShapeClassificationMetrics(char: char, uiFont: uiFont)
+                                    let aspect = (metrics.height > 0 && metrics.width > 0) ? (metrics.width / metrics.height) : 1.0
+                                    
+                                    // 文字のアスペクト比に合わせたオーダーメイドの枠サイズ（長方形・その他の図形用）
+                                    var rw = w
+                                    var rh = h
+                                    if aspect > 1.0 {
+                                        rh = w / aspect
+                                    } else {
+                                        rw = h * aspect
+                                    }
+                                    
+                                    switch shape {
+                                    case .square:
+                                        // 💡 正方形はアスペクト比を無視し、固定サイズの真四角（w, h）で描画する
+                                        builder.addLine(from: [-w/2, h/2], to: [w/2, h/2], thickness: t)
+                                        builder.addLine(from: [-w/2, -h/2], to: [w/2, -h/2], thickness: t)
+                                        builder.addLine(from: [-w/2, -h/2], to: [-w/2, h/2], thickness: t)
+                                        builder.addLine(from: [w/2, -h/2], to: [w/2, h/2], thickness: t)
+                                        
+                                    case .wide_rect, .tall_rect:
+                                        // 💡 長方形は文字のアスペクト比に合わせたサイズ（rw, rh）で描画する
+                                        builder.addLine(from: [-rw/2, rh/2], to: [rw/2, rh/2], thickness: t)
+                                        builder.addLine(from: [-rw/2, -rh/2], to: [rw/2, -rh/2], thickness: t)
+                                        builder.addLine(from: [-rw/2, -rh/2], to: [-rw/2, rh/2], thickness: t)
+                                        builder.addLine(from: [rw/2, -rh/2], to: [rw/2, rh/2], thickness: t)
+                                        
+                                    case .triangle:
+                                        builder.addLine(from: [-rw/2, -rh/2], to: [rw/2, -rh/2], thickness: t)
+                                        builder.addLine(from: [-rw/2, -rh/2], to: [0, rh/2], thickness: t)
+                                        builder.addLine(from: [rw/2, -rh/2], to: [0, rh/2], thickness: t)
+                                        
+                                    case .inv_triangle:
+                                        builder.addLine(from: [-rw/2, rh/2], to: [rw/2, rh/2], thickness: t)
+                                        builder.addLine(from: [-rw/2, rh/2], to: [0, -rh/2], thickness: t)
+                                        builder.addLine(from: [rw/2, rh/2], to: [0, -rh/2], thickness: t)
+                                        
+                                    case .trapezoid:
+                                        let topW = rw * 0.5
+                                        builder.addLine(from: [-topW/2, rh/2], to: [topW/2, rh/2], thickness: t)
+                                        builder.addLine(from: [-rw/2, -rh/2], to: [rw/2, -rh/2], thickness: t)
+                                        builder.addLine(from: [-rw/2, -rh/2], to: [-topW/2, rh/2], thickness: t)
+                                        builder.addLine(from: [rw/2, -rh/2], to: [topW/2, rh/2], thickness: t)
+                                        
+                                    case .rhombus:
+                                        builder.addLine(from: [0.0, rh/2], to: [rw/2, 0.0], thickness: t)
+                                        builder.addLine(from: [rw/2, 0.0], to: [0.0, -rh/2], thickness: t)
+                                        builder.addLine(from: [0.0, -rh/2], to: [-rw/2, 0.0], thickness: t)
+                                        builder.addLine(from: [-rw/2, 0.0], to: [0.0, rh/2], thickness: t)
+                                    }
+//                    switch shape {
+//                    case .square:
+//                        builder.addLine(from: [-w/2, h/2], to: [w/2, h/2], thickness: t)
+//                        builder.addLine(from: [-w/2, -h/2], to: [w/2, -h/2], thickness: t)
+//                        builder.addLine(from: [-w/2, -h/2], to: [-w/2, h/2], thickness: t)
+//                        builder.addLine(from: [w/2, -h/2], to: [w/2, h/2], thickness: t)
+//                        
+//                    case .wide_rect:
+//                        let rh = h * 0.45
+//                        builder.addLine(from: [-w/2, rh/2], to: [w/2, rh/2], thickness: t)
+//                        builder.addLine(from: [-w/2, -rh/2], to: [w/2, -rh/2], thickness: t)
+//                        builder.addLine(from: [-w/2, -rh/2], to: [-w/2, rh/2], thickness: t)
+//                        builder.addLine(from: [w/2, -rh/2], to: [w/2, rh/2], thickness: t)
+//                        
+//                    case .tall_rect:
+//                        let rw = w * 0.6
+//                        builder.addLine(from: [-rw/2, h/2], to: [rw/2, h/2], thickness: t)
+//                        builder.addLine(from: [-rw/2, -h/2], to: [rw/2, -h/2], thickness: t)
+//                        builder.addLine(from: [-rw/2, -h/2], to: [-rw/2, h/2], thickness: t)
+//                        builder.addLine(from: [rw/2, -h/2], to: [rw/2, h/2], thickness: t)
+//                        
+//                    case .triangle:
+//                        builder.addLine(from: [-w/2, -h/2], to: [w/2, -h/2], thickness: t)
+//                        builder.addLine(from: [-w/2, -h/2], to: [0, h/2], thickness: t)
+//                        builder.addLine(from: [w/2, -h/2], to: [0, h/2], thickness: t)
+//                        
+//                    case .inv_triangle:
+//                        builder.addLine(from: [-w/2, h/2], to: [w/2, h/2], thickness: t)
+//                        builder.addLine(from: [-w/2, h/2], to: [0, -h/2], thickness: t)
+//                        builder.addLine(from: [w/2, h/2], to: [0, -h/2], thickness: t)
+//                        
+//                    case .trapezoid:
+//                        let topW = w * 0.5
+//                        builder.addLine(from: [-topW/2, h/2], to: [topW/2, h/2], thickness: t)
+//                        builder.addLine(from: [-w/2, -h/2], to: [w/2, -h/2], thickness: t)
+//                        builder.addLine(from: [-w/2, -h/2], to: [-topW/2, h/2], thickness: t)
+//                        builder.addLine(from: [w/2, -h/2], to: [topW/2, h/2], thickness: t)
+//                        
+//                    case .rhombus:
+//                        builder.addLine(from: [0.0, h/2], to: [w/2, 0.0], thickness: t)
+//                        builder.addLine(from: [w/2, 0.0], to: [0.0, -h/2], thickness: t)
+//                        builder.addLine(from: [0.0, -h/2], to: [-w/2, 0.0], thickness: t)
+//                        builder.addLine(from: [-w/2, 0.0], to: [0.0, h/2], thickness: t)
+//                    }
+                    
+                case "daikei":
+                    let metrics = ARShapeBuilder.getTrapezoidMetrics(char: char, font: ctFont)
+                    if metrics.topWidth > 0 && metrics.bottomWidth > 0 && metrics.height > 0 {
+                        let tw = metrics.topWidth
+                        let bw = metrics.bottomWidth
+                        let ch = metrics.height
+                        builder.addLine(from: [-tw/2, ch/2], to: [tw/2, ch/2], thickness: t)
+                        builder.addLine(from: [-bw/2, -ch/2], to: [bw/2, -ch/2], thickness: t)
+                        builder.addLine(from: [-bw/2, -ch/2], to: [-tw/2, ch/2], thickness: t)
+                        builder.addLine(from: [bw/2, -ch/2], to: [tw/2, ch/2], thickness: t)
                     }
                     
                 case "henTsukuri":
@@ -251,128 +507,9 @@ class ARGuideRenderer {
         return group
     }
     
-    // (これ以下の reportPerformance、getCPUUsage、charEntityVisualBounds はそのまま維持)
-    private static func reportPerformance(root: Entity, duration: Double) {
-        var info = mach_task_basic_info()
-        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<integer_t>.size)
-        let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
-            }
-        }
-        let memoryUsed = kerr == KERN_SUCCESS ? Double(info.resident_size) / 1024.0 / 1024.0 : 0.0
-        
-        let cpuUsage = getCPUUsage()
-        
-        func countEntities(_ entity: Entity) -> Int {
-            return 1 + entity.children.reduce(0) { $0 + countEntities($1) }
-        }
-        let entityCount = countEntities(root)
-        
-        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        print("📊 [AR Monitor] システム負荷状況")
-        print("  🔸 CPU 使用率           : \(String(format: "%.1f", cpuUsage)) %")
-        print("  🔸 メモリ使用量 (RAM)   : \(String(format: "%.2f", memoryUsed)) MB / 3072.00 MB")
-        print("  🔸 AR空間のオブジェクト数: \(entityCount) 個")
-        print("  🔸 処理時間 (メインスレッド): \(String(format: "%.4f", duration)) ms")
-        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    }
-    
-    private static func getCPUUsage() -> Double {
-        var totalUsageOfCPU: Double = 0.0
-        var threadsList: thread_act_array_t?
-        var threadsCount = mach_msg_type_number_t(0)
-        let threadsResult = task_threads(mach_task_self_, &threadsList, &threadsCount)
-        
-        if threadsResult == KERN_SUCCESS, let threadsList = threadsList {
-            for index in 0..<threadsCount {
-                var threadInfo = thread_basic_info()
-                var threadInfoCount = mach_msg_type_number_t(THREAD_INFO_MAX)
-                let infoResult = withUnsafeMutablePointer(to: &threadInfo) {
-                    $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
-                        thread_info(threadsList[Int(index)], thread_flavor_t(THREAD_BASIC_INFO), $0, &threadInfoCount)
-                    }
-                }
-                guard infoResult == KERN_SUCCESS else { continue }
-                let isIdle = threadInfo.flags & TH_FLAGS_IDLE != 0
-                if !isIdle {
-                    totalUsageOfCPU += (Double(threadInfo.cpu_usage) / Double(TH_USAGE_SCALE)) * 100.0
-                }
-            }
-            vm_deallocate(mach_task_self_, vm_address_t(UInt(bitPattern: threadsList)), vm_size_t(Int(threadsCount) * MemoryLayout<thread_t>.stride))
-        }
-        return totalUsageOfCPU
-    }
-    
     private static func charEntityVisualBounds(mesh: MeshResource) -> SIMD2<Float> {
         let dummyEntity = ModelEntity(mesh: mesh)
         let bounds = dummyEntity.visualBounds(relativeTo: nil)
         return SIMD2<Float>(bounds.center.x, bounds.center.y)
-    }
-    
-    // ===================================================
-    // 🌟 4. 新規追加：設計図スタッフ（MeshBuilder）
-    // ===================================================
-    private struct MeshBuilder {
-        var positions: [SIMD3<Float>] = []
-        var indices: [UInt32] = []
-        
-        mutating func addQuad(p0: SIMD3<Float>, p1: SIMD3<Float>, p2: SIMD3<Float>, p3: SIMD3<Float>) {
-            let startIdx = UInt32(positions.count)
-            positions.append(contentsOf: [p0, p1, p2, p3])
-            // 💡 表面として認識されるように反時計回りで結ぶ
-            indices.append(contentsOf: [startIdx, startIdx+2, startIdx+1, startIdx, startIdx+3, startIdx+2])
-        }
-        
-        mutating func addLine(from: SIMD2<Float>, to: SIMD2<Float>, thickness: Float) {
-            let dir = to - from
-            let length = simd_length(dir)
-            guard length > 0 else { return }
-            let normDir = dir / length
-            let perp = SIMD2<Float>(-normDir.y, normDir.x) * (thickness / 2.0)
-            
-            let p0 = SIMD3<Float>(from.x - perp.x, from.y - perp.y, 0)
-            let p1 = SIMD3<Float>(from.x + perp.x, from.y + perp.y, 0)
-            let p2 = SIMD3<Float>(to.x + perp.x, to.y + perp.y, 0)
-            let p3 = SIMD3<Float>(to.x - perp.x, to.y - perp.y, 0)
-            
-            addQuad(p0: p0, p1: p1, p2: p2, p3: p3)
-        }
-        
-        // 💡 新規追加：点線を計算して追加する機能
-        mutating func addDashedLine(from: SIMD2<Float>, to: SIMD2<Float>, thickness: Float, dashLength: Float, gapLength: Float) {
-            let dir = to - from
-            let totalLength = simd_length(dir)
-            guard totalLength > 0 else { return }
-            let normDir = dir / totalLength
-            
-            var currentLen: Float = 0.0
-            while currentLen < totalLength {
-                let start = from + normDir * currentLen
-                // 最後の破線がはみ出さないように長さを調整
-                let thisDashLen = min(dashLength, totalLength - currentLen)
-                let end = start + normDir * thisDashLen
-                
-                addLine(from: start, to: end, thickness: thickness)
-                
-                currentLen += dashLength + gapLength
-            }
-        }
-        
-        mutating func addDot(center: SIMD2<Float>, radius: Float) {
-            let p0 = SIMD3<Float>(center.x + radius, center.y - radius, 0)
-            let p1 = SIMD3<Float>(center.x - radius, center.y - radius, 0)
-            let p2 = SIMD3<Float>(center.x - radius, center.y + radius, 0)
-            let p3 = SIMD3<Float>(center.x + radius, center.y + radius, 0)
-            addQuad(p0: p0, p1: p1, p2: p2, p3: p3)
-        }
-        
-        func generate() -> MeshResource? {
-            guard !positions.isEmpty else { return nil }
-            var desc = MeshDescriptor(name: "mergedMesh")
-            desc.positions = MeshBuffers.Positions(positions)
-            desc.primitives = .triangles(indices)
-            return try? MeshResource.generate(from: [desc])
-        }
     }
 }
