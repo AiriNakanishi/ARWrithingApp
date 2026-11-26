@@ -20,18 +20,25 @@ struct ContentView: View {
     
     // 💡 初期状態：ガイド設定パネルは閉じておく
     @State private var isPanelPresented = false
+    @State private var isButtonsCollapsed = false
     
     @State private var currentZoom: CGFloat = 1.0
     @GestureState private var gestureZoom: CGFloat = 1.0
     @State private var currentOffset: CGSize = .zero
     @GestureState private var gestureOffset: CGSize = .zero
     
-    // 大学の住所をデフォルト設定
-    @State private var targetText = "一八寺町旭道あ〒"
-    // 💡 初期状態：アプリ起動時にすぐ文字設定ポップアップを出すため true にする
-    @State private var isEditingText = true
-    // ポップアップを開いた時に、現在の文字が最初から入力欄に入っているようにする
-    @State private var textInputBuffer = "一八寺町旭道あ〒"
+    private let presetTexts: [(label: String, text: String)] = [
+            ("練習", "上寺市緑町丘道一丁目"),
+            ("本番①", "星野区小桜台八番六号"),
+            ("本番②", "千歳市花園一条十丁目")
+        ]
+        
+        // 練習用の住所をデフォルト設定
+        @State private var targetText = "上寺市緑町丘道一丁目"
+        // 💡 初期状態：アプリ起動時にすぐ文字設定ポップアップを出すため true にする
+        @State private var isEditingText = true
+        // ポップアップを開いた時に、現在の文字が最初から入力欄に入っているようにする
+        @State private var textInputBuffer = "上寺市緑町丘道一丁目"
     
     let baseParallax = CGSize(width: 0, height: 0)
     
@@ -53,6 +60,7 @@ struct ContentView: View {
                     if isPanelPresented && !isEditingText {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                             isPanelPresented = false
+                                        isButtonsCollapsed = true
                         }
                     }
                 }
@@ -101,10 +109,10 @@ struct ContentView: View {
                                     ForEach(GuideMode.allCases) { mode in
                                         Button(action: {
                                             if selectedModes.contains(mode) {
-                                                    selectedModes.removeAll() // 選択中を再タップ → ガイドなし（通常筆記）
-                                                } else {
-                                                    selectedModes = [mode]    // 別モードをタップ → 重複せず切り替え
-                                                }
+                                                selectedModes.removeAll() // 選択中を再タップ → ガイドなし（通常筆記）
+                                            } else {
+                                                selectedModes = [mode]    // 別モードをタップ → 重複せず切り替え
+                                            }
                                         }) {
                                             Text(mode.rawValue)
                                                 .font(.subheadline)
@@ -139,51 +147,93 @@ struct ContentView: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         
                     } else {
-                        // --- ⚙️ フローティングアクションボタン群（右下に縦並び） ---
+                        // --- ⚙️ フローティングアクションボタン群（右端のつまみで収納可能） ---
                         HStack {
                             Spacer()
                             
-                            VStack(spacing: 16) {
-                                // ① 文字変更ボタン（上段）
+                            if isButtonsCollapsed {
+                                // 【収納時】右端の半透明つまみ（<）のみ表示
                                 Button(action: {
-                                    textInputBuffer = targetText
-                                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                                        isEditingText = true
+                                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                        isPanelPresented = false
+                                        isButtonsCollapsed = false
                                     }
                                 }) {
-                                    Image(systemName: "pencil")
-                                        .font(.title2)
+                                    Image(systemName: "chevron.left")
+                                        .font(.headline)
                                         .fontWeight(.bold)
                                         .foregroundColor(.white)
-                                        .frame(width: 56, height: 56)
-                                        .background(Color.blue)
-                                        .clipShape(Circle())
-                                        .shadow(color: Color.black.opacity(0.25), radius: 6, x: 0, y: 4)
+                                        .frame(width: 32, height: 64)
+                                        .background(Color.black.opacity(0.35))
+                                        .cornerRadius(14)
                                 }
+                                .padding(.trailing, 4)
+                                .padding(.bottom, 45)
+                                .transition(.move(edge: .trailing).combined(with: .opacity))
                                 
-                                // ② ガイド設定展開ボタン（下段）
-                                Button(action: {
-                                    withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
-                                        isPanelPresented = true
+                            } else {
+                                // 【展開時】収納つまみ（>）＋ 青いボタン2つ
+                                HStack(alignment: .center, spacing: 12) {
+                                    // 収納用つまみボタン
+                                    Button(action: {
+                                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                            isPanelPresented = false
+                                                        isButtonsCollapsed = true
+                                        }
+                                    }) {
+                                        Image(systemName: "chevron.right")
+                                            .font(.headline)
+                                            .fontWeight(.bold)
+                                            .foregroundColor(.white)
+                                            .frame(width: 28, height: 56)
+                                            .background(Color.black.opacity(0.35))
+                                            .cornerRadius(12)
                                     }
-                                }) {
-                                    Image(systemName: "slider.horizontal.3")
-                                        .font(.title2)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(.white)
-                                        .frame(width: 56, height: 56)
-                                        .background(Color.blue)
-                                        .clipShape(Circle())
-                                        .shadow(color: Color.black.opacity(0.25), radius: 6, x: 0, y: 4)
+                                    
+                                    VStack(spacing: 16) {
+                                        // ① 文字変更ボタン（上段）
+                                        Button(action: {
+                                            textInputBuffer = targetText
+                                            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                                                isEditingText = true
+                                            }
+                                        }) {
+                                            Image(systemName: "pencil")
+                                                .font(.title2)
+                                                .fontWeight(.bold)
+                                                .foregroundColor(.white)
+                                                .frame(width: 56, height: 56)
+                                                .background(Color.blue)
+                                                .clipShape(Circle())
+                                                .shadow(color: Color.black.opacity(0.25), radius: 6, x: 0, y: 4)
+                                        }
+                                        
+                                        // ② ガイド設定展開ボタン（下段）
+                                        Button(action: {
+                                            withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+                                                isPanelPresented = true
+                                            }
+                                        }) {
+                                            Image(systemName: "slider.horizontal.3")
+                                                .font(.title2)
+                                                .fontWeight(.bold)
+                                                .foregroundColor(.white)
+                                                .frame(width: 56, height: 56)
+                                                .background(Color.blue)
+                                                .clipShape(Circle())
+                                                .shadow(color: Color.black.opacity(0.25), radius: 6, x: 0, y: 4)
+                                        }
+                                    }
                                 }
+                                .padding(.trailing, 20)
+                                .padding(.bottom, 25)
+                                .transition(.move(edge: .trailing).combined(with: .opacity))
                             }
-                            .padding(.trailing, 20)
-                            .padding(.bottom, 25)
-                            .transition(.scale.combined(with: .opacity))
                         }
                     }
                 }
             }
+            
             
             // ==========================================
             // 🌟 3. 一番手前：文字入力ポップアップと暗いベール
@@ -206,7 +256,28 @@ struct ContentView: View {
                             .font(.footnote)
                             .foregroundColor(.secondary)
                     }
-                    
+                    // 実験用プリセットボタン（タップで下の入力欄にセット）
+                                        HStack(spacing: 8) {
+                                            ForEach(presetTexts, id: \.label) { preset in
+                                                let isSelected = (textInputBuffer == preset.text)
+                                                Button(action: {
+                                                    textInputBuffer = preset.text
+                                                }) {
+                                                    Text(preset.label)
+                                                        .font(.subheadline)
+                                                        .fontWeight(.semibold)
+                                                        .frame(maxWidth: .infinity)
+                                                        .padding(.vertical, 10)
+                                                        .background(isSelected ? Color.blue.opacity(0.15) : Color.gray.opacity(0.15))
+                                                        .foregroundColor(isSelected ? .blue : .primary)
+                                                        .overlay(
+                                                            RoundedRectangle(cornerRadius: 10)
+                                                                .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 1.5)
+                                                        )
+                                                        .cornerRadius(10)
+                                                }
+                                            }
+                                        }
                     TextField("文字を入力...", text: $textInputBuffer)
                         .textFieldStyle(.roundedBorder)
                         .font(.body)
