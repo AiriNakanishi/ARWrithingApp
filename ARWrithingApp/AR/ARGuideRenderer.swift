@@ -296,6 +296,10 @@ class ARGuideRenderer {
                     if features.strokeCount == 1 {
                         // 1画は「なし」
                         logGroupA = "なし"
+                    } else if let splitX = features.radicalSplitX {
+                        // 左右構造かつ部首が left/right → 部首の境目（青の破線・枠ガイドは表示しない）
+                        blueBuilder.addLine(from: [splitX, fixedBoxSize * 0.47], to: [splitX, -fixedBoxSize * 0.47], thickness: t)
+                        logGroupA = "部首の境目"
                     } else if getGaikeiShape(char: char, uiFont: uiFont) == .rhombus {
                         // 2画以上かつひし形 → 外形（ひし形・青の実線）
                         let metrics = ARShapeBuilder.getShapeClassificationMetrics(char: char, uiFont: uiFont)
@@ -314,11 +318,7 @@ class ARGuideRenderer {
                     }
                     
                     // --- グループB（内部・運筆ガイド）---
-                    if let splitX = features.radicalSplitX {
-                        // 左右構造かつ部首が left/right → 部首の境目（青の破線）
-                        blueBuilder.addDashedLine(from: [splitX, fixedBoxSize / 2], to: [splitX, -fixedBoxSize / 2], thickness: t, dashLength: dashLen, gapLength: dashLen)
-                        logGroupB = "部首の境目"
-                    } else if features.totalLength >= 365.0 {
+                    if features.totalLength >= 365.0 {
                         // 線の総延長が 365.0 以上 → 「なし」
                         logGroupB = "なし"
                     } else {
