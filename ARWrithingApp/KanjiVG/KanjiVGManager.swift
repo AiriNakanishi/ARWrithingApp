@@ -9,6 +9,13 @@ enum GuideType {
     case none
 }
 
+struct AutoGuideFeatures {
+    let hasSVG: Bool        // KanjiVGデータが存在するか（ひらがな等の判定用）
+    let strokeCount: Int    // 画数
+    let totalLength: Float  // 線の総延長（109×109座標系）
+    let radicalSplitX: Float? // 左右部首の分割X座標（該当しない場合はnil）
+}
+
 class KanjiVGManager: NSObject, XMLParserDelegate {
     static let shared = KanjiVGManager()
     
@@ -16,6 +23,7 @@ class KanjiVGManager: NSObject, XMLParserDelegate {
     private var guideCache: [Character: GuideType] = [:]
     private var startsCache: [Character: [SIMD2<Float>]] = [:]
     private var intersectionsCache: [Character: [SIMD2<Float>]] = [:]
+    private var autoFeaturesCache: [Character: AutoGuideFeatures] = [:]
     
     private var leftBox = BoundingBox()
     private var rightBox = BoundingBox()
@@ -225,4 +233,95 @@ class KanjiVGManager: NSObject, XMLParserDelegate {
             currentPosition = positionStack.last(where: { majorPositions.contains($0) }) ?? ""
         }
     }
+    
+    // ==========================================
+        // 🌟 おまかせモード専用：特徴量の一括取得
+        // ==========================================
+        func getAutoGuideFeatures(for char: Character, boxWidth: Float, boxHeight: Float) -> AutoGuideFeatures {
+            if let cached = autoFeaturesCache[char] { return cached }
+            
+            guard let unicodeScalar = char.unicodeScalars.first else {
+                return AutoGuideFeatures(hasSVG: false, strokeCount: 0, totalLength: 0, radicalSplitX: nil)
+            }
+            let hexString = String(format: "%05x", unicodeScalar.value)
+            guard let url = Bundle.main.url(forResource: hexString, withExtension: "svg", subdirectory: "KanjiVGData")
+                         ?? Bundle.main.url(forResource: hexString, withExtension: "svg"),
+                  let parser = XMLParser(contentsOf: url) else {
+                let fallback = AutoGuideFeatures(hasSVG: false, strokeCount: 0, totalLength: 0, radicalSplitX: nil)
+                autoFeaturesCache[char] = fallback
+                return fallback
+            }
+            
+            let delegate = AutoGuideXMLParser()
+            parser.delegate = delegate
+            parser.parse()
+            
+            var splitX: Float? = nil
+            if delegate.isLeftRightRadical && delegate.leftBox.isValid && delegate.rightBox.isValid {
+                let kvgCanvasSize: Float = 109.0
+                let midX = (delegate.leftBox.maxX + delegate.rightBox.minX) / 2.0
+                splitX = -boxWidth / 2.0 + (boxWidth * (midX / kvgCanvasSize))
+            }
+            
+            let features = AutoGuideFeatures(
+                hasSVG: true,
+                strokeCount: delegate.strokeCount,
+                totalLength: delegate.totalLength,
+                radicalSplitX: splitX
+            )
+            autoFeaturesCache[char] = features
+            return features
+        }
+        
+        // おまかせモード専用のXMLパーサー（既存のgetGuideに影響させないため分離）
+        private class AutoGuideXMLParser: NSObject, XMLParserDelegate {
+            var strokeCount: Int = 0
+            var totalLength: Float = 0.0
+            var isLeftRightRadical: Bool = false
+            var leftBox = KanjiVGManager.BoundingBox()
+            var rightBox = KanjiVGManager.BoundingBox()
+            
+            private var positionStack: [String] = []
+            private var currentPosition: String = ""
+            private let majorPositions = ["left", "right", "nyo", "kamae", "tare", "nyoc", "kamaec"]
+            private let nonLeftRightPositions: Set<String> = ["top", "bottom", "nyo", "nyoc", "kamae", "kamaec", "tare", "tarec"]
+            
+            func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String : String] = [:]) {
+                if elementName == "g" {
+                    let pos = attributeDict["kvg:position"] ?? ""
+                    positionStack.append(pos)
+                    currentPosition = positionStack.last(where: { majorPositions.contains($0) }) ?? ""
+                    
+                    // 部首（kvg:radical="general"）自身が left または right に属しているか判定（「八」を除外）
+                    if attributeDict["kvg:radical"] == "general" {
+                        let hasOtherStructure = positionStack.contains(where: { nonLeftRightPositions.contains($0) })
+                        let hasLeftOrRight = positionStack.contains("left") || positionStack.contains("right")
+                        if !hasOtherStructure && hasLeftOrRight {
+                            isLeftRightRadical = true
+                        }
+                    }
+                } else if elementName == "path" {
+                    strokeCount += 1
+                    if let d = attributeDict["d"] {
+                        let pts = KanjiVGParser.parsePolyline(from: d)
+                        if pts.count >= 2 {
+                            for i in 0..<(pts.count - 1) {
+                                totalLength += simd_distance(pts[i], pts[i + 1])
+                            }
+                        }
+                        for p in pts {
+                            if currentPosition == "left" { leftBox.update(x: p.x, y: p.y) }
+                            else if currentPosition == "right" { rightBox.update(x: p.x, y: p.y) }
+                        }
+                    }
+                }
+            }
+            
+            func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
+                if elementName == "g" && !positionStack.isEmpty {
+                    positionStack.removeLast()
+                    currentPosition = positionStack.last(where: { majorPositions.contains($0) }) ?? ""
+                }
+            }
+        }
 }

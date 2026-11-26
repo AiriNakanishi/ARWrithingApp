@@ -18,25 +18,25 @@ class ARGuideRenderer {
     // 💡 あいりさん考案の美文字アルゴリズム（ノイズ除去・極端アスペクト比対応版）
         static func getGaikeiShape(char: Character, uiFont: UIFont) -> GuideShape {
             
-            let charString = String(char)
-                    switch charString {
-                    case "上":
-                        return .triangle
-                    case "寺":
-                        return .rhombus
-                    case "丘":
-                        return .trapezoid
-                    case "市", "丁":
-                        return .inv_triangle
-                    case "緑", "町", "道":
-                        return .square
-                    case "一":
-                        return .wide_rect
-                    case "目":
-                        return .tall_rect
-                    default:
-                        break // 💡 指定されていない文字はここを通り抜けて、今までの自動判定へ進む
-                    }
+//            let charString = String(char)
+//                    switch charString {
+//                    case "上":
+//                        return .triangle
+//                    case "寺":
+//                        return .rhombus
+//                    case "丘":
+//                        return .trapezoid
+//                    case "市", "丁":
+//                        return .inv_triangle
+//                    case "緑", "町", "道":
+//                        return .square
+//                    case "一":
+//                        return .wide_rect
+//                    case "目":
+//                        return .tall_rect
+//                    default:
+//                        break // 💡 指定されていない文字はここを通り抜けて、今までの自動判定へ進む
+//                    }
             
             let metrics = ARShapeBuilder.getShapeClassificationMetrics(char: char, uiFont: uiFont)
             
@@ -111,7 +111,8 @@ class ARGuideRenderer {
         let baseAlpha: CGFloat = 0.15
         
         let fontSize = CGFloat(referenceSize * 0.95)
-        let uiFont = UIFont(name: "HiraMinProN-W3", size: fontSize) ?? UIFont(name: "HiraMinProN-W6", size: fontSize) ?? .systemFont(ofSize: fontSize, weight: .regular)
+//        let uiFont = UIFont(name: "HiraMinProN-W3", size: fontSize) ?? UIFont(name: "HiraMinProN-W6", size: fontSize) ?? .systemFont(ofSize: fontSize, weight: .regular)
+        let uiFont = UIFont(name: "KleeOne-Regular", size: fontSize) ?? .systemFont(ofSize: fontSize, weight: .regular)
         var textMaterial = UnlitMaterial(color: UIColor.black.withAlphaComponent(0.8)); textMaterial.blending = .transparent(opacity: 1.0)
         var baseGuideMat = UnlitMaterial(color: UIColor.gray.withAlphaComponent(baseAlpha)); baseGuideMat.blending = .transparent(opacity: 1.0)
         
@@ -174,7 +175,7 @@ class ARGuideRenderer {
         renshuSide.position.x = isLeftHanded ? -baseOffset : baseOffset
         
         let activeNames = Set(modes.map { String(describing: $0) })
-        let toggleableNames = ["nazoru", "gaikei", "daikei", "henTsukuri", "shiten", "koten"]
+        let toggleableNames = ["omakase", "nazoru", "gaikei", "daikei", "henTsukuri", "shiten", "koten"]
         let allSides = [otehonSide, renshuSide]
         
         for modeName in toggleableNames {
@@ -231,8 +232,8 @@ class ARGuideRenderer {
         let baseAlpha: CGFloat = 0.15
         
         let fontSize = CGFloat(referenceSize * 0.95)
-        let uiFont = UIFont(name: "HiraMinProN-W3", size: fontSize) ?? .systemFont(ofSize: fontSize)
-        
+//        let uiFont = UIFont(name: "HiraMinProN-W3", size: fontSize) ?? .systemFont(ofSize: fontSize)
+        let uiFont = UIFont(name: "KleeOne-Regular", size: fontSize) ?? .systemFont(ofSize: fontSize)
         let ctFont = CTFontCreateWithName(uiFont.fontName as CFString, 100, nil)
     
         
@@ -254,6 +255,97 @@ class ARGuideRenderer {
                 let traceEntity = ModelEntity(mesh: charMesh, materials: [traceMaterial])
                 traceEntity.position = [-bounds.x, currentY - bounds.y, 0.001]
                 group.addChild(traceEntity)
+                
+            } else if modeName == "omakase" {
+                // ===================================================
+                // 🌟 おまかせモード：グループA（外枠）＋ グループB（内部）
+                // ===================================================
+                var blueBuilder = MeshBuilder() // 青：外枠（実線）＋ 部首の境目（破線）
+                var redBuilder = MeshBuilder()  // 赤：始点（点）
+                
+                let t = lineThickness * 1.5
+                let dashLen = referenceSize * 0.076
+                let w = fixedBoxSize
+                let h = fixedBoxSize
+                
+                let features = KanjiVGManager.shared.getAutoGuideFeatures(for: char, boxWidth: fixedBoxSize, boxHeight: fixedBoxSize)
+                
+                // 外接台形を描く共通処理
+                func addTrapezoid() {
+                    let metrics = ARShapeBuilder.getTrapezoidMetrics(char: char, font: ctFont)
+                    if metrics.topWidth > 0 && metrics.bottomWidth > 0 && metrics.height > 0 {
+                        let tw = metrics.topWidth
+                        let bw = metrics.bottomWidth
+                        let ch = metrics.height
+                        blueBuilder.addLine(from: [-tw/2, ch/2], to: [tw/2, ch/2], thickness: t)
+                        blueBuilder.addLine(from: [-bw/2, -ch/2], to: [bw/2, -ch/2], thickness: t)
+                        blueBuilder.addLine(from: [-bw/2, -ch/2], to: [-tw/2, ch/2], thickness: t)
+                        blueBuilder.addLine(from: [bw/2, -ch/2], to: [tw/2, ch/2], thickness: t)
+                    }
+                }
+                
+                var logGroupA = "なし"
+                var logGroupB = "なし"
+                
+                if !features.hasSVG {
+                    // 💡 フォールバック（ひらがな・記号などKanjiVGにない文字）：外接台形のみ
+                    addTrapezoid()
+                    logGroupA = "外接台形(フォールバック)"
+                } else {
+                    // --- グループA（外枠・骨格ガイド）---
+                    if features.strokeCount == 1 {
+                        // 1画は「なし」
+                        logGroupA = "なし"
+                    } else if getGaikeiShape(char: char, uiFont: uiFont) == .rhombus {
+                        // 2画以上かつひし形 → 外形（ひし形・青の実線）
+                        let metrics = ARShapeBuilder.getShapeClassificationMetrics(char: char, uiFont: uiFont)
+                        let aspect = (metrics.height > 0 && metrics.width > 0) ? (metrics.width / metrics.height) : 1.0
+                        let rw = aspect > 1.0 ? w : h * aspect
+                        let rh = aspect > 1.0 ? w / aspect : h
+                        blueBuilder.addLine(from: [0.0, rh/2], to: [rw/2, 0.0], thickness: t)
+                        blueBuilder.addLine(from: [rw/2, 0.0], to: [0.0, -rh/2], thickness: t)
+                        blueBuilder.addLine(from: [0.0, -rh/2], to: [-rw/2, 0.0], thickness: t)
+                        blueBuilder.addLine(from: [-rw/2, 0.0], to: [0.0, rh/2], thickness: t)
+                        logGroupA = "外形(ひし形)"
+                    } else {
+                        // それ以外 → 外接台形（青の実線）
+                        addTrapezoid()
+                        logGroupA = "外接台形"
+                    }
+                    
+                    // --- グループB（内部・運筆ガイド）---
+                    if let splitX = features.radicalSplitX {
+                        // 左右構造かつ部首が left/right → 部首の境目（青の破線）
+                        blueBuilder.addDashedLine(from: [splitX, fixedBoxSize / 2], to: [splitX, -fixedBoxSize / 2], thickness: t, dashLength: dashLen, gapLength: dashLen)
+                        logGroupB = "部首の境目"
+                    } else if features.totalLength >= 365.0 {
+                        // 線の総延長が 365.0 以上 → 「なし」
+                        logGroupB = "なし"
+                    } else {
+                        // 線の総延長が 365.0 未満 → 始点（赤の点）
+                        let strokeStarts = KanjiVGManager.shared.getStrokeStarts(for: char, boxWidth: fixedBoxSize, boxHeight: fixedBoxSize)
+                        for point in strokeStarts {
+                            redBuilder.addDot(center: [point.x, point.y], radius: dotRadius * 0.75)
+                        }
+                        logGroupB = "始点"
+                    }
+                }
+                
+                // 🔍 テストケース確認用ログ（Xcodeのコンソールに判定結果と総延長を表示）
+                print("[おまかせ] 「\(char)」 画数:\(features.strokeCount) 総延長:\(String(format: "%.1f", features.totalLength)) -> A:\(logGroupA) / B:\(logGroupB)")
+                
+                // 青メッシュ（外枠＋部首の境目）を配置
+                if let blueMesh = blueBuilder.generate() {
+                    let blueEntity = ModelEntity(mesh: blueMesh, materials: [guideMat])
+                    blueEntity.position = [0, currentY, 0.0002]
+                    group.addChild(blueEntity)
+                }
+                // 赤メッシュ（始点）をわずかに手前に配置して重なりチラつきを防止
+                if let redMesh = redBuilder.generate() {
+                    let redEntity = ModelEntity(mesh: redMesh, materials: [shitenMat])
+                    redEntity.position = [0, currentY, 0.0003]
+                    group.addChild(redEntity)
+                }
                 
             } else {
                 var builder = MeshBuilder()
